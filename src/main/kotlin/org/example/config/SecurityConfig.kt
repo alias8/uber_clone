@@ -19,7 +19,7 @@ class SecurityConfig(private val jwtFilter: JwtFilter) {
             .csrf { it.disable() }
             .sessionManagement { it.sessionCreationPolicy(SessionCreationPolicy.STATELESS) }
             .authorizeHttpRequests {
-                it.requestMatchers("/auth/**").permitAll()
+                it.requestMatchers("/auth/register", "/auth/login").permitAll()
                 it.anyRequest().authenticated()
             }
             .addFilterBefore(jwtFilter, UsernamePasswordAuthenticationFilter::class.java)

@@ -18,16 +18,17 @@ class JwtFilter(private val jwtUtil: JwtUtil) : OncePerRequestFilter() {
         chain: FilterChain
     ) {
         val header = request.getHeader("Authorization")
+        val token = when {
+            header != null && header.startsWith("Bearer ") -> header.removePrefix("Bearer ")
+            else -> request.cookies?.find { it.name == "auth_token" }?.value
+        }
 
-        if (header != null && header.startsWith("Bearer ")) {
-            val token = header.removePrefix("Bearer ")
-            if (jwtUtil.isValid(token)) {
-                val username = jwtUtil.extractUsername(token)
-                val auth = UsernamePasswordAuthenticationToken(
-                    username, null, listOf(SimpleGrantedAuthority("ROLE_USER"))
-                )
-                SecurityContextHolder.getContext().authentication = auth
-            }
+        if (token != null && jwtUtil.isValid(token)) {
+            val username = jwtUtil.extractUsername(token)
+            val auth = UsernamePasswordAuthenticationToken(
+                username, null, listOf(SimpleGrantedAuthority("ROLE_USER"))
+            )
+            SecurityContextHolder.getContext().authentication = auth
         }
 
         chain.doFilter(request, response)
