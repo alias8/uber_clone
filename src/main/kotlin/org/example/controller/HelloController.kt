@@ -23,7 +23,7 @@ class HelloController(
         userRepository.findByUsername(username) ?: return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build()
 
         setRedisSomethingKey(redisTemplate, "value1")
-        kafkaEventProducer.publishPostCreated("post1")
+        kafkaEventProducer.publishRideRequested("test-ride-id")
         return ResponseEntity.status(HttpStatus.OK).body("ok")
     }
 }

@@ -1,0 +1,41 @@
+package org.example.dto
+
+import org.example.model.Ride
+import org.example.model.RideStatus
+import java.math.BigDecimal
+import java.time.Instant
+
+data class RideRequest(
+    val pickupLat: Double,
+    val pickupLng: Double,
+    val dropoffLat: Double,
+    val dropoffLng: Double
+)
+
+data class RideResponse(
+    val id: String,
+    val riderId: String,
+    val driverId: String?,
+    val pickupLat: Double,
+    val pickupLng: Double,
+    val dropoffLat: Double,
+    val dropoffLng: Double,
+    val status: RideStatus,
+    val fare: BigDecimal?,
+    val requestedAt: Instant,
+    val completedAt: Instant?
+)
+
+fun Ride.toResponse() = RideResponse(
+    id = id,
+    riderId = riderId,
+    driverId = driverId,
+    pickupLat = pickupLat,
+    pickupLng = pickupLng,
+    dropoffLat = dropoffLat,
+    dropoffLng = dropoffLng,
+    status = status,
+    fare = fare,
+    requestedAt = requestedAt,
+    completedAt = completedAt
+)

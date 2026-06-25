@@ -13,5 +13,8 @@ data class User(
     val username: String = "",
 
     @Column(nullable = false)
-    val passwordHash: String = ""
+    val passwordHash: String = "",
+
+    // Rating as a rider — null until first rating received
+    val avgRating: Double? = null
 )
