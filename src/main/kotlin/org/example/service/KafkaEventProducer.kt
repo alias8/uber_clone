@@ -18,4 +18,8 @@ class KafkaEventProducer(
     fun publishRideCompleted(rideId: String) {
         kafkaTemplate.send("ride-completed", rideId)
     }
+
+    fun publishRideCancelled(rideId: String) {
+        kafkaTemplate.send("ride-cancelled", rideId)
+    }
 }

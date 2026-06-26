@@ -9,7 +9,8 @@ import org.springframework.stereotype.Service
 @Service
 class KafkaConsumer(
     private val rideRepository: RideRepository,
-    private val dispatchService: DispatchService
+    private val dispatchService: DispatchService,
+    private val riderLocationEmitterRegistry: RiderLocationEmitterRegistry
 ) {
     private val log = LoggerFactory.getLogger(KafkaConsumer::class.java)
 
@@ -28,12 +29,20 @@ class KafkaConsumer(
         // TODO: push notification to rider — "your driver is on the way"
     }
 
-    // When a ride completes: record analytics, trigger any billing integration
+    // When a ride completes: close rider's location stream, trigger payment, analytics
     @KafkaListener(topics = ["ride-completed"], groupId = "feed-fanout-group")
     fun onRideCompleted(rideId: String) {
         val ride = rideRepository.findById(rideId).orElse(null) ?: return
         if (ride.status != RideStatus.COMPLETED) return
         log.info("Ride completed: id={} fare={} driver={} rider={}", ride.id, ride.fare, ride.driverId, ride.riderId)
+        riderLocationEmitterRegistry.complete(rideId)
         // TODO: trigger payment processing, send receipt to rider
+    }
+
+    @KafkaListener(topics = ["ride-cancelled"], groupId = "feed-fanout-group")
+    fun onRideCancelled(rideId: String) {
+        val ride = rideRepository.findById(rideId).orElse(null) ?: return
+        log.info("Ride cancelled: id={} rider={}", ride.id, ride.riderId)
+        riderLocationEmitterRegistry.complete(rideId)
     }
 }

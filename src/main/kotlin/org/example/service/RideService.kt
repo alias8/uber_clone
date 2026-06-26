@@ -112,7 +112,9 @@ class RideService(
             }
         }
 
-        return rideRepository.save(ride.copy(status = RideStatus.CANCELLED))
+        val saved = rideRepository.save(ride.copy(status = RideStatus.CANCELLED))
+        kafkaEventProducer.publishRideCancelled(saved.id)
+        return saved
     }
 
     internal fun calculateFare(ride: Ride): BigDecimal {

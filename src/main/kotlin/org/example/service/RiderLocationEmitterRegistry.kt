@@ -20,4 +20,8 @@ class RiderLocationEmitterRegistry {
             SseEmitter.event().name("driver_location").data("""{"lat":$lat,"lng":$lng}""").build()
         )
     }
+
+    fun complete(rideId: String) {
+        emitters.remove(rideId)?.complete()
+    }
 }
