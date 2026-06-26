@@ -16,7 +16,9 @@ A ride-hailing backend built with Kotlin and Spring Boot. Covers the core Uber f
 
 ## Features
 
-**Rides** — riders request a trip with pickup/dropoff coordinates. The service auto-assigns the nearest available driver within 5 km. Rides move through a status machine: `REQUESTED → ACCEPTED → IN_PROGRESS → COMPLETED` (or `CANCELLED`). Fare is calculated using the Haversine formula plus a surge multiplier.
+**Dispatch** — when a rider requests a trip, the ride is saved and a Kafka event is published immediately so `POST /rides` returns fast. A Kafka consumer picks up the event asynchronously, finds all online drivers within 5 km using a Redis geo-index, and publishes a ride offer to each driver's Redis pub/sub channel (`ride_offers:{driverId}`). Drivers receive offers in real time over a persistent SSE connection (`GET /driver/offers`). The first driver to call `POST /rides/{id}/accept` gets the ride; concurrent accepts are handled safely with JPA optimistic locking.
+
+**Rides** — rides move through a status machine: `REQUESTED → MATCHED → IN_PROGRESS → COMPLETED` (or `CANCELLED`). Fare is calculated at completion using the Haversine distance formula plus a surge multiplier.
 
 **Surge pricing** — Redis-backed surge multiplier keyed by geographic area. Multiplier scales with local demand and is cached with a TTL.
 
@@ -26,7 +28,7 @@ A ride-hailing backend built with Kotlin and Spring Boot. Covers the core Uber f
 
 **Auth** — register, login, and `/auth/me`. JWTs are issued on login/register, stored as HttpOnly cookies (30-day expiry), and validated on every request via a servlet filter. Passwords are BCrypt-hashed.
 
-**Kafka events** — ride lifecycle events are published to Kafka for downstream consumers (notifications, analytics, etc.).
+**Kafka events** — `ride-requested` triggers async dispatch; `ride-accepted` and `ride-completed` are consumed for downstream use (push notifications, payment processing, analytics).
 
 ## Running locally
 
@@ -59,9 +61,9 @@ POST /auth/login           { username, password }           → 200 + sets auth 
 GET  /auth/me                                               → { userId }
 
 # Rides
-POST /rides                { pickupLat, pickupLng, dropoffLat, dropoffLng }  → 201 (auto-assigns driver)
+POST /rides                { pickupLat, pickupLng, dropoffLat, dropoffLng }  → 201, triggers async dispatch to nearby drivers
 GET  /rides/{id}                                            → ride details
-POST /rides/{id}/accept    (driver)                         → moves to ACCEPTED
+POST /rides/{id}/accept    (driver)                         → moves to MATCHED
 POST /rides/{id}/start     (driver)                         → moves to IN_PROGRESS
 POST /rides/{id}/complete  (driver)                         → moves to COMPLETED, calculates fare
 POST /rides/{id}/cancel                                     → moves to CANCELLED
@@ -76,6 +78,7 @@ POST /driver/mode/off                                       → go offline
 POST /driver/location      { lat, lng }                     → update GPS location
 GET  /driver/rides                                          → driver's ride history
 GET  /driver/nearby        { lat, lng, radiusKm }           → list of online nearby drivers
+GET  /driver/offers                                         → SSE stream of incoming ride offers (keep open)
 
 GET  /health                                                → 200
 ```

@@ -39,5 +39,8 @@ data class Ride(
     @Column(nullable = false)
     val requestedAt: Instant = Instant.now(),
 
-    val completedAt: Instant? = null
+    val completedAt: Instant? = null,
+
+    @Version
+    val version: Long = 0
 )

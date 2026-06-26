@@ -8,16 +8,16 @@ import org.springframework.stereotype.Service
 
 @Service
 class KafkaConsumer(
-    private val rideRepository: RideRepository
+    private val rideRepository: RideRepository,
+    private val dispatchService: DispatchService
 ) {
     private val log = LoggerFactory.getLogger(KafkaConsumer::class.java)
 
-    // When a ride is requested: log for audit, could notify nearby drivers here
     @KafkaListener(topics = ["ride-requested"], groupId = "feed-fanout-group")
     fun onRideRequested(rideId: String) {
         val ride = rideRepository.findById(rideId).orElse(null) ?: return
         log.info("Ride requested: id={} rider={} status={}", ride.id, ride.riderId, ride.status)
-        // TODO: push notification to nearby driver apps
+        dispatchService.fanoutToNearbyDrivers(ride)
     }
 
     // When a driver accepts: notify the rider their driver is on the way

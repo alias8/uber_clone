@@ -6,7 +6,9 @@ import org.example.dto.RideRequest
 import org.example.repository.DriverRepository
 import org.example.repository.RideRepository
 import org.springframework.http.HttpStatus
+import org.springframework.orm.ObjectOptimisticLockingFailureException
 import org.springframework.stereotype.Service
+import org.springframework.transaction.annotation.Transactional
 import org.springframework.web.server.ResponseStatusException
 import java.math.BigDecimal
 import java.math.RoundingMode
@@ -17,13 +19,10 @@ import kotlin.math.*
 class RideService(
     private val rideRepository: RideRepository,
     private val driverRepository: DriverRepository,
-    private val driverService: DriverService,
     private val surgeService: SurgeService,
     private val kafkaEventProducer: KafkaEventProducer
 ) {
     fun requestRide(riderId: String, request: RideRequest): Ride {
-        val nearestDriverId = driverService.findNearestAvailableDriver(request.pickupLat, request.pickupLng)
-
         val ride = Ride(
             riderId = riderId,
             pickupLat = request.pickupLat,
@@ -33,11 +32,6 @@ class RideService(
         )
         val saved = rideRepository.save(ride)
         kafkaEventProducer.publishRideRequested(saved.id)
-
-        // Auto-match if a nearby driver is available
-        if (nearestDriverId != null) {
-            return acceptRide(saved.id, nearestDriverId)
-        }
         return saved
     }
 
@@ -46,6 +40,7 @@ class RideService(
             ResponseStatusException(HttpStatus.NOT_FOUND, "Ride not found")
         }
 
+    @Transactional
     fun acceptRide(rideId: String, driverId: String): Ride {
         val ride = getRide(rideId)
         if (ride.status != RideStatus.REQUESTED) {
@@ -58,10 +53,14 @@ class RideService(
             throw ResponseStatusException(HttpStatus.CONFLICT, "Driver is not currently available")
         }
 
-        driverRepository.save(driver.copy(isAvailable = false))
-        val saved = rideRepository.save(ride.copy(driverId = driverId, status = RideStatus.MATCHED))
-        kafkaEventProducer.publishRideAccepted(saved.id)
-        return saved
+        try {
+            driverRepository.save(driver.copy(isAvailable = false))
+            val saved = rideRepository.save(ride.copy(driverId = driverId, status = RideStatus.MATCHED))
+            kafkaEventProducer.publishRideAccepted(saved.id)
+            return saved
+        } catch (_: ObjectOptimisticLockingFailureException) {
+            throw ResponseStatusException(HttpStatus.CONFLICT, "Ride was already accepted by another driver")
+        }
     }
 
     fun startRide(rideId: String, driverId: String): Ride {
