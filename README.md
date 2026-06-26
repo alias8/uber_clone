@@ -18,7 +18,7 @@ A ride-hailing backend built with Kotlin and Spring Boot. Covers the core Uber f
 
 **Dispatch** — when a rider requests a trip, the ride is saved and a Kafka event is published immediately so `POST /rides` returns fast. A Kafka consumer picks up the event asynchronously, finds all online drivers within 5 km using a Redis geo-index, and publishes a ride offer to each driver's Redis pub/sub channel (`ride_offers:{driverId}`). Drivers receive offers in real time over a persistent SSE connection (`GET /driver/offers`). The first driver to call `POST /rides/{id}/accept` gets the ride; concurrent accepts are handled safely with JPA optimistic locking.
 
-**Rides** — rides move through a status machine: `REQUESTED → MATCHED → IN_PROGRESS → COMPLETED` (or `CANCELLED`). Fare is calculated at completion using the Haversine distance formula plus a surge multiplier.
+**Rides** — rides move through a status machine: `REQUESTED → MATCHED → IN_PROGRESS → COMPLETED` (or `CANCELLED`). Fare is calculated once at request time using the Haversine distance formula plus the current surge multiplier, and locked in — the rider pays that price regardless of surge changes during the trip.
 
 **Surge pricing** — Redis-backed surge multiplier keyed by geographic area. Multiplier scales with local demand and is cached with a TTL.
 
@@ -28,7 +28,7 @@ A ride-hailing backend built with Kotlin and Spring Boot. Covers the core Uber f
 
 **Auth** — register, login, and `/auth/me`. JWTs are issued on login/register, stored as HttpOnly cookies (30-day expiry), and validated on every request via a servlet filter. Passwords are BCrypt-hashed.
 
-**Kafka events** — `ride-requested` triggers async dispatch; `ride-accepted` and `ride-completed` are consumed for downstream use (push notifications, payment processing, analytics).
+**Kafka events** — `ride-requested` triggers async dispatch; `ride-accepted`, `ride-completed`, and `ride-cancelled` are consumed for downstream work (payment processing, analytics) and to close the rider's live location stream.
 
 ## Running locally
 
@@ -65,9 +65,10 @@ POST /rides                { pickupLat, pickupLng, dropoffLat, dropoffLng }  →
 GET  /rides/{id}                                            → ride details
 POST /rides/{id}/accept    (driver)                         → moves to MATCHED
 POST /rides/{id}/start     (driver)                         → moves to IN_PROGRESS
-POST /rides/{id}/complete  (driver)                         → moves to COMPLETED, calculates fare
+POST /rides/{id}/complete  (driver)                         → moves to COMPLETED, fare set to upfront price
 POST /rides/{id}/cancel                                     → moves to CANCELLED
 POST /rides/{id}/rate      { rating, comment }              → submits rating
+GET  /rides/{id}/location                                   → SSE stream of driver's live location (rider only, keep open)
 GET  /rides/history                                         → paginated ride history for caller
 
 # Drivers

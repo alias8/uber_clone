@@ -49,6 +49,48 @@ The SSE spec supports `Last-Event-ID` for replay on reconnect, but this server d
 
 Browsers cap HTTP/1.1 connections per origin at 6. The SSE stream consumes one, leaving 5 for API calls — fine for a driver app. With HTTP/2 (requires TLS) connections are multiplexed so the limit disappears. Set `server.http2.enabled=true` and configure SSL to enable.
 
-## Surge pricing staleness
+---
 
-The surge multiplier is cached in Redis with a TTL. The price shown to the rider at request time may differ from the multiplier applied when the fare is calculated at completion. This is acceptable (and is how Uber works — upfront price estimate vs. actual fare), but worth knowing.
+## Interview Questions
+
+### "Design a ride-hailing dispatch system"
+The core challenge is fanout with low latency. Key points to hit:
+- **Geo-indexing**: use Redis `GEOADD`/`GEORADIUS` to find nearby drivers in O(log N). Don't query Postgres for location — it has no spatial index by default.
+- **Async dispatch**: the rider's `POST /rides` should return immediately. Publish a Kafka event and let a consumer do the fanout asynchronously.
+- **Driver notification**: drivers hold a persistent SSE (or WebSocket) connection. When a ride is dispatched, publish to a Redis pub/sub channel per driver; a `MessageListener` on each server instance pushes it to the right SSE emitter.
+- **Race condition on accept**: multiple drivers receive the same offer. Use optimistic locking (`@Version`) so only one write succeeds; the rest get a 409.
+- **Fare locking**: calculate fare upfront (distance formula + surge), store it, don't recalculate at completion.
+
+### "Why Kafka instead of calling the dispatch service directly?"
+Two reasons: response time and resilience. The rider's POST blocks until dispatch completes if you call directly — that's a Redis geo query plus N pub/sub publishes. With Kafka, the ride is saved and the event is published in one transaction; the rider gets a response immediately. Kafka also gives you durability: if the consumer is slow or restarts, the event isn't lost.
+The tradeoff is added latency before drivers see the offer (milliseconds in practice) and operational complexity of running Kafka.
+
+### "Optimistic vs pessimistic locking — which and when?"
+- **Optimistic** (`@Version`): adds `WHERE version = ?` to the UPDATE. No lock held, no blocking. Losers get an exception at commit time. Right when contention is low and short-lived — like multiple drivers racing to accept a single ride over a few seconds.
+- **Pessimistic** (`SELECT FOR UPDATE`): locks the row at read time. Losers wait (or fail fast). Right when contention is high and sustained — like a counter being incremented by many workers simultaneously.
+For ride acceptance, optimistic wins: conflicts are rare, the window is short, and you don't want to serialize every accept attempt behind a DB lock.
+
+### "How does Redis pub/sub work across multiple server instances?"
+Every instance subscribes to `ride_offers:*` via `RedisMessageListenerContainer` when it starts. When `DispatchService` publishes to `ride_offers:{driverId}`, Redis broadcasts the message to all subscribers — meaning all server instances receive it. Each instance looks up `driverId` in its local `EmitterRegistry`. The instance holding that driver's SSE connection delivers the message; the others get a null and do nothing. No sticky sessions needed.
+
+### "How would you scale this to 100k concurrent drivers?"
+- **SSE connections don't consume threads** — async servlets release the Tomcat thread after headers are sent. The bottleneck is file descriptors (raise `ulimit -n`) and heap (each emitter is a few KB).
+- **Driver availability query is the real bottleneck**: `findByIsAvailableTrue()` is a full Postgres table scan on every dispatch. Fix: track availability in a Redis Set so you can do `SISMEMBER` instead of a DB query.
+- **Kafka partitions**: one partition means one consumer processes all dispatch events serially. Add partitions and consumer instances to parallelize.
+- **Postgres connection pool**: `acceptRide` is `@Transactional` and holds a connection. Under burst accepts, the default pool of 10 exhausts. Size to `(cores × 2) + spindles`.
+- **Horizontal scaling**: stateless app instances behind a load balancer. Redis handles shared state (geo-index, pub/sub, surge cache).
+
+### "Why SSE instead of WebSockets?"
+SSE is unidirectional (server → client) and runs over plain HTTP — simpler to implement, works through proxies and load balancers without special config, and auto-reconnects in most client libraries. For this use case (server pushing location updates to rider, server pushing offers to driver), the client never needs to send data over the same connection, so WebSockets are unnecessary complexity. The one advantage of WebSockets is bidirectional communication over a single connection — useful if the driver needed to send location updates *and* receive offers on one socket, but here those are separate HTTP calls.
+
+### "When would you use a message queue vs. direct service calls?"
+Use a queue when: (1) the caller shouldn't wait for the work to finish (async fan-out, background jobs), (2) the receiver might be temporarily unavailable and you need durability, or (3) multiple consumers need to react to the same event independently. Use direct calls when: the result is needed immediately, failure should block the operation, or the added latency and operational cost of a queue isn't justified. In this codebase, dispatch is async (queue); ride state transitions are synchronous (direct calls).
+
+### "How does the fare price get calculated?"
+Haversine formula gives straight-line distance in km between pickup and dropoff coordinates. That's multiplied by a per-km rate plus a base fare, then multiplied by the surge multiplier (fetched from Redis, cached with TTL). The result is stored as `estimatedFare` at request time. Real Uber also factors in estimated time, vehicle type, and local market rates — the Haversine distance is a simplification since it ignores actual road routing.
+
+---
+
+## Surge pricing & fare locking
+
+The surge multiplier is cached in Redis with a TTL. Fare is calculated once at request time (Haversine distance × surge multiplier) and stored as `estimatedFare`. At completion, `fare` is set to that locked-in value — no recalculation. This matches real Uber behaviour: the rider sees and pays the upfront price regardless of surge changes during the trip. The only staleness risk is within the surge cache TTL at the moment of request, which is acceptable.
