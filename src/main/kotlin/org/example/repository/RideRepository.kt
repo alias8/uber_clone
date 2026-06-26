@@ -9,6 +9,7 @@ import org.springframework.data.jpa.repository.JpaRepository
 interface RideRepository : JpaRepository<Ride, String> {
     fun findByRiderIdOrderByRequestedAtDesc(riderId: String, pageable: Pageable): Page<Ride>
     fun findByDriverIdOrderByRequestedAtDesc(driverId: String, pageable: Pageable): Page<Ride>
+    fun findFirstByDriverIdAndStatusIn(driverId: String, statuses: List<RideStatus>): Ride?
     fun countByStatusAndPickupLatBetweenAndPickupLngBetween(
         status: RideStatus,
         latMin: Double, latMax: Double,

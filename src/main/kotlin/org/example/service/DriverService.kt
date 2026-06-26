@@ -3,7 +3,9 @@ package org.example.service
 import org.example.dto.DriverRegisterRequest
 import org.example.dto.NearbyDriverResponse
 import org.example.model.Driver
+import org.example.model.RideStatus
 import org.example.repository.DriverRepository
+import org.example.repository.RideRepository
 import org.springframework.data.geo.Circle
 import org.springframework.data.geo.Distance
 import org.springframework.data.geo.Metrics
@@ -16,10 +18,14 @@ import org.springframework.web.server.ResponseStatusException
 
 private const val DRIVER_GEO_KEY = "drivers:locations"
 
+private val ACTIVE_RIDE_STATUSES = listOf(RideStatus.MATCHED, RideStatus.IN_PROGRESS)
+
 @Service
 class DriverService(
     private val driverRepository: DriverRepository,
-    private val redisTemplate: RedisTemplate<String, String>
+    private val redisTemplate: RedisTemplate<String, String>,
+    private val rideRepository: RideRepository,
+    private val riderLocationEmitterRegistry: RiderLocationEmitterRegistry
 ) {
     private val geo get() = redisTemplate.opsForGeo()
 
@@ -57,6 +63,8 @@ class DriverService(
     fun updateLocation(userId: String, lat: Double, lng: Double) {
         getProfile(userId)
         geo.add(DRIVER_GEO_KEY, Point(lng, lat), userId)
+        rideRepository.findFirstByDriverIdAndStatusIn(userId, ACTIVE_RIDE_STATUSES)
+            ?.let { riderLocationEmitterRegistry.emit(it.id, lat, lng) }
     }
 
     fun findNearby(lat: Double, lng: Double, radiusKm: Double): List<NearbyDriverResponse> {
