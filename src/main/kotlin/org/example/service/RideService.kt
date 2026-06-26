@@ -84,9 +84,8 @@ class RideService(
             throw ResponseStatusException(HttpStatus.FORBIDDEN, "Not the assigned driver for this ride")
         }
 
-        val fare = calculateFare(ride)
         val saved = rideRepository.save(
-            ride.copy(status = RideStatus.COMPLETED, fare = fare, completedAt = Instant.now())
+            ride.copy(status = RideStatus.COMPLETED, fare = ride.estimatedFare, completedAt = Instant.now())
         )
 
         driverRepository.findById(driverId).ifPresent { driver ->
