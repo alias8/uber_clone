@@ -25,7 +25,8 @@ class DriverService(
     private val driverRepository: DriverRepository,
     private val redisTemplate: RedisTemplate<String, String>,
     private val rideRepository: RideRepository,
-    private val riderLocationEmitterRegistry: RiderLocationEmitterRegistry
+    private val riderLocationEmitterRegistry: RiderLocationEmitterRegistry,
+    private val emitterRegistry: EmitterRegistry
 ) {
     private val geo get() = redisTemplate.opsForGeo()
 
@@ -57,7 +58,9 @@ class DriverService(
     fun goOffline(userId: String): Driver {
         val driver = getProfile(userId)
         redisTemplate.opsForZSet().remove(DRIVER_GEO_KEY, userId)
-        return driverRepository.save(driver.copy(isAvailable = false))
+        val saved = driverRepository.save(driver.copy(isAvailable = false))
+        emitterRegistry.complete(userId)
+        return saved
     }
 
     fun updateLocation(userId: String, lat: Double, lng: Double) {

@@ -18,4 +18,8 @@ class EmitterRegistry {
     fun emit(driverId: String, payload: String) {
         emitters[driverId]?.send(SseEmitter.event().name("ride_offer").data(payload).build())
     }
+
+    fun complete(driverId: String) {
+        emitters.remove(driverId)?.complete()
+    }
 }
