@@ -21,12 +21,10 @@ class KafkaConsumer(
         dispatchService.fanoutToNearbyDrivers(ride)
     }
 
-    // When a driver accepts: notify the rider their driver is on the way
     @KafkaListener(topics = ["ride-accepted"], groupId = "feed-fanout-group")
     fun onRideAccepted(rideId: String) {
         val ride = rideRepository.findById(rideId).orElse(null) ?: return
         log.info("Ride accepted: id={} driver={} rider={}", ride.id, ride.driverId, ride.riderId)
-        // TODO: push notification to rider — "your driver is on the way"
     }
 
     // When a ride completes: close rider's location stream, trigger payment, analytics
