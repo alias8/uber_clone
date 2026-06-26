@@ -4,8 +4,8 @@ import org.springframework.boot.autoconfigure.SpringBootApplication
 import org.springframework.boot.runApplication
 
 @SpringBootApplication
-class SomeApplication
+class UberClone
 
 fun main(args: Array<String>) {
-    runApplication<SomeApplication>(*args)
+    runApplication<UberClone>(*args)
 }

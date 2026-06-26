@@ -5,8 +5,11 @@ import org.example.model.Ride
 import org.slf4j.LoggerFactory
 import org.springframework.data.redis.core.RedisTemplate
 import org.springframework.stereotype.Service
+import java.util.concurrent.TimeUnit
 
 internal const val RIDE_OFFER_CHANNEL_PREFIX = "ride_offers:"
+internal const val DISPATCHED_KEY_PREFIX = "dispatched:"
+private const val DISPATCHED_TTL_MINUTES = 5L
 
 @Service
 class DispatchService(
@@ -32,6 +35,10 @@ class DispatchService(
                 "estimatedFare" to ride.estimatedFare
             )
         )
+        val driverIds = nearby.map { it.driverId }.toTypedArray()
+        redisTemplate.opsForSet().add("$DISPATCHED_KEY_PREFIX${ride.id}", *driverIds)
+        redisTemplate.expire("$DISPATCHED_KEY_PREFIX${ride.id}", DISPATCHED_TTL_MINUTES, TimeUnit.MINUTES)
+
         nearby.forEach { driver ->
             redisTemplate.convertAndSend("$RIDE_OFFER_CHANNEL_PREFIX${driver.driverId}", payload)
             log.info("Dispatched offer for ride {} to driver {} ({} km away)", ride.id, driver.driverId, driver.distanceKm)
