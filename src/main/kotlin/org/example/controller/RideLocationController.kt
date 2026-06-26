@@ -3,7 +3,7 @@ package org.example.controller
 import org.example.model.RideStatus
 import org.example.repository.UserRepository
 import org.example.service.RideService
-import org.example.service.RiderLocationEmitterRegistry
+import org.example.service.EmitterRegistry
 import org.springframework.http.HttpStatus
 import org.springframework.http.MediaType
 import org.springframework.security.core.annotation.AuthenticationPrincipal
@@ -18,7 +18,7 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter
 @RequestMapping("/rides")
 class RideLocationController(
     private val rideService: RideService,
-    private val riderLocationEmitterRegistry: RiderLocationEmitterRegistry,
+    private val emitterRegistry: EmitterRegistry,
     private val userRepository: UserRepository
 ) {
     // Rider holds this connection open after MATCHED to track driver position in real time.
@@ -37,7 +37,7 @@ class RideLocationController(
             throw ResponseStatusException(HttpStatus.CONFLICT, "No active driver to track for this ride")
         }
         val emitter = SseEmitter(Long.MAX_VALUE)
-        riderLocationEmitterRegistry.register(id, emitter)
+        emitterRegistry.register(id, emitter)
         return emitter
     }
 }

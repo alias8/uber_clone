@@ -16,7 +16,7 @@ class RideOfferListener(
         val driverId = channel.removePrefix(RIDE_OFFER_CHANNEL_PREFIX)
         val payload = String(message.body)
         try {
-            emitterRegistry.emit(driverId, payload)
+            emitterRegistry.emit(driverId, "ride_offer", payload)
         } catch (e: Exception) {
             log.warn("Failed to push offer to driver {}: {}", driverId, e.message)
         }

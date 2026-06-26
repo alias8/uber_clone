@@ -10,7 +10,7 @@ import org.springframework.stereotype.Service
 class KafkaConsumer(
     private val rideRepository: RideRepository,
     private val dispatchService: DispatchService,
-    private val riderLocationEmitterRegistry: RiderLocationEmitterRegistry
+    private val emitterRegistry: EmitterRegistry
 ) {
     private val log = LoggerFactory.getLogger(KafkaConsumer::class.java)
 
@@ -33,7 +33,7 @@ class KafkaConsumer(
         val ride = rideRepository.findById(rideId).orElse(null) ?: return
         if (ride.status != RideStatus.COMPLETED) return
         log.info("Ride completed: id={} fare={} driver={} rider={}", ride.id, ride.fare, ride.driverId, ride.riderId)
-        riderLocationEmitterRegistry.complete(rideId)
+        emitterRegistry.complete(rideId)
         // TODO: trigger payment processing, send receipt to rider
     }
 
@@ -41,6 +41,6 @@ class KafkaConsumer(
     fun onRideCancelled(rideId: String) {
         val ride = rideRepository.findById(rideId).orElse(null) ?: return
         log.info("Ride cancelled: id={} rider={}", ride.id, ride.riderId)
-        riderLocationEmitterRegistry.complete(rideId)
+        emitterRegistry.complete(rideId)
     }
 }

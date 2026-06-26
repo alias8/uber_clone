@@ -8,18 +8,18 @@ import java.util.concurrent.ConcurrentHashMap
 class EmitterRegistry {
     private val emitters = ConcurrentHashMap<String, SseEmitter>()
 
-    fun register(driverId: String, emitter: SseEmitter) {
-        emitters[driverId] = emitter
-        emitter.onCompletion { emitters.remove(driverId) }
-        emitter.onTimeout { emitters.remove(driverId) }
-        emitter.onError { emitters.remove(driverId) }
+    fun register(key: String, emitter: SseEmitter) {
+        emitters[key] = emitter
+        emitter.onCompletion { emitters.remove(key) }
+        emitter.onTimeout { emitters.remove(key) }
+        emitter.onError { emitters.remove(key) }
     }
 
-    fun emit(driverId: String, payload: String) {
-        emitters[driverId]?.send(SseEmitter.event().name("ride_offer").data(payload).build())
+    fun emit(key: String, eventName: String, payload: String) {
+        emitters[key]?.send(SseEmitter.event().name(eventName).data(payload).build())
     }
 
-    fun complete(driverId: String) {
-        emitters.remove(driverId)?.complete()
+    fun complete(key: String) {
+        emitters.remove(key)?.complete()
     }
 }

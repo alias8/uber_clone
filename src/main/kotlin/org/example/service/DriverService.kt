@@ -25,7 +25,6 @@ class DriverService(
     private val driverRepository: DriverRepository,
     private val redisTemplate: RedisTemplate<String, String>,
     private val rideRepository: RideRepository,
-    private val riderLocationEmitterRegistry: RiderLocationEmitterRegistry,
     private val emitterRegistry: EmitterRegistry
 ) {
     private val geo get() = redisTemplate.opsForGeo()
@@ -67,7 +66,7 @@ class DriverService(
         getProfile(userId)
         geo.add(DRIVER_GEO_KEY, Point(lng, lat), userId)
         rideRepository.findFirstByDriverIdAndStatusIn(userId, ACTIVE_RIDE_STATUSES)
-            ?.let { riderLocationEmitterRegistry.emit(it.id, lat, lng) }
+            ?.let { emitterRegistry.emit(it.id, "driver_location", """{"lat":$lat,"lng":$lng}""") }
     }
 
     fun findNearby(lat: Double, lng: Double, radiusKm: Double): List<NearbyDriverResponse> {
