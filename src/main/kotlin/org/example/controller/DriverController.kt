@@ -1,14 +1,18 @@
 package org.example.controller
 
+import jakarta.servlet.http.HttpServletResponse
 import org.example.dto.*
+import org.example.model.Role
 import org.example.repository.RideRepository
 import org.example.repository.UserRepository
+import org.example.security.JwtCookieService
 import org.example.service.DriverService
 import org.springframework.data.domain.Page
 import org.springframework.data.domain.PageRequest
 import org.springframework.data.domain.Sort
 import org.springframework.http.HttpStatus
 import org.springframework.http.ResponseEntity
+import org.springframework.security.access.prepost.PreAuthorize
 import org.springframework.security.core.annotation.AuthenticationPrincipal
 import org.springframework.web.bind.annotation.*
 import org.springframework.web.server.ResponseStatusException
@@ -18,7 +22,8 @@ import org.springframework.web.server.ResponseStatusException
 class DriverController(
     private val driverService: DriverService,
     private val rideRepository: RideRepository,
-    private val userRepository: UserRepository
+    private val userRepository: UserRepository,
+    private val jwtCookieService: JwtCookieService
 ) {
     private fun resolveUserId(username: String): String =
         userRepository.findByUsername(username)?.id
@@ -27,19 +32,24 @@ class DriverController(
     @PostMapping("/register")
     fun register(
         @RequestBody request: DriverRegisterRequest,
-        @AuthenticationPrincipal username: String
+        @AuthenticationPrincipal username: String,
+        response: HttpServletResponse
     ): ResponseEntity<DriverProfileResponse> {
         val userId = resolveUserId(username)
-        return ResponseEntity.status(HttpStatus.CREATED).body(driverService.registerDriver(userId, request).toResponse())
+        val result = driverService.registerDriver(userId, request)
+        userRepository.findByUsername(username)?.let { userRepository.save(it.copy(role = Role.DRIVER)) }
+        response.addCookie(jwtCookieService.issueTokenCookie(username, Role.DRIVER))
+        return ResponseEntity.status(HttpStatus.CREATED).body(result.toResponse())
     }
 
+    @PreAuthorize("hasRole('DRIVER')")
     @GetMapping("/profile")
     fun profile(@AuthenticationPrincipal username: String): ResponseEntity<DriverProfileResponse> {
         val userId = resolveUserId(username)
         return ResponseEntity.ok(driverService.getProfile(userId).toResponse())
     }
 
-    // Go online — requires an initial location so the driver appears in geo searches immediately
+    @PreAuthorize("hasRole('DRIVER')")
     @PostMapping("/mode/on")
     fun goOnline(
         @RequestBody request: DriverLocationRequest,
@@ -49,13 +59,14 @@ class DriverController(
         return ResponseEntity.ok(driverService.goOnline(userId, request.lat, request.lng).toResponse())
     }
 
+    @PreAuthorize("hasRole('DRIVER')")
     @PostMapping("/mode/off")
     fun goOffline(@AuthenticationPrincipal username: String): ResponseEntity<DriverProfileResponse> {
         val userId = resolveUserId(username)
         return ResponseEntity.ok(driverService.goOffline(userId).toResponse())
     }
 
-    // Called periodically by driver app during a trip
+    @PreAuthorize("hasRole('DRIVER')")
     @PostMapping("/location")
     fun updateLocation(
         @RequestBody request: DriverLocationRequest,
@@ -66,6 +77,7 @@ class DriverController(
         return ResponseEntity.noContent().build()
     }
 
+    @PreAuthorize("hasRole('DRIVER')")
     @GetMapping("/rides")
     fun rideHistory(
         @AuthenticationPrincipal username: String,
@@ -77,6 +89,7 @@ class DriverController(
         return ResponseEntity.ok(rideRepository.findByDriverIdOrderByRequestedAtDesc(userId, pageable).map { it.toResponse() })
     }
 
+    @PreAuthorize("hasRole('DRIVER')")
     @GetMapping("/nearby")
     fun nearby(
         @RequestParam lat: Double,

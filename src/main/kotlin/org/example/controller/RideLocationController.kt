@@ -6,6 +6,7 @@ import org.example.service.RideService
 import org.example.service.EmitterRegistry
 import org.springframework.http.HttpStatus
 import org.springframework.http.MediaType
+import org.springframework.security.access.prepost.PreAuthorize
 import org.springframework.security.core.annotation.AuthenticationPrincipal
 import org.springframework.web.bind.annotation.GetMapping
 import org.springframework.web.bind.annotation.PathVariable
@@ -21,7 +22,7 @@ class RideLocationController(
     private val emitterRegistry: EmitterRegistry,
     private val userRepository: UserRepository
 ) {
-    // Rider holds this connection open after MATCHED to track driver position in real time.
+    @PreAuthorize("hasRole('RIDER')")
     @GetMapping("/{id}/location", produces = [MediaType.TEXT_EVENT_STREAM_VALUE])
     fun streamDriverLocation(
         @PathVariable id: String,

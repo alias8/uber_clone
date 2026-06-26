@@ -15,6 +15,10 @@ data class User(
     @Column(nullable = false)
     val passwordHash: String = "",
 
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false)
+    val role: Role = Role.RIDER,
+
     // Rating as a rider — null until first rating received
     val avgRating: Double? = null
 )

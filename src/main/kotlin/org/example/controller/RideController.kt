@@ -13,6 +13,7 @@ import org.springframework.data.domain.PageRequest
 import org.springframework.data.domain.Sort
 import org.springframework.http.HttpStatus
 import org.springframework.http.ResponseEntity
+import org.springframework.security.access.prepost.PreAuthorize
 import org.springframework.security.core.annotation.AuthenticationPrincipal
 import org.springframework.web.bind.annotation.*
 import org.springframework.web.server.ResponseStatusException
@@ -29,6 +30,7 @@ class RideController(
         userRepository.findByUsername(username)?.id
             ?: throw ResponseStatusException(HttpStatus.UNAUTHORIZED)
 
+    @PreAuthorize("hasRole('RIDER')")
     @PostMapping
     fun requestRide(
         @RequestBody request: RideRequest,
@@ -43,6 +45,7 @@ class RideController(
     fun getRide(@PathVariable id: String): ResponseEntity<RideResponse> =
         ResponseEntity.ok(rideService.getRide(id).toResponse())
 
+    @PreAuthorize("hasRole('DRIVER')")
     @PostMapping("/{id}/accept")
     fun acceptRide(
         @PathVariable id: String,
@@ -52,6 +55,7 @@ class RideController(
         return ResponseEntity.ok(rideService.acceptRide(id, userId).toResponse())
     }
 
+    @PreAuthorize("hasRole('DRIVER')")
     @PostMapping("/{id}/start")
     fun startRide(
         @PathVariable id: String,
@@ -61,6 +65,7 @@ class RideController(
         return ResponseEntity.ok(rideService.startRide(id, userId).toResponse())
     }
 
+    @PreAuthorize("hasRole('DRIVER')")
     @PostMapping("/{id}/complete")
     fun completeRide(
         @PathVariable id: String,

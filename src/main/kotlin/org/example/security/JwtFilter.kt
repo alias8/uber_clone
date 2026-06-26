@@ -3,6 +3,7 @@ package org.example.security
 import jakarta.servlet.FilterChain
 import jakarta.servlet.http.HttpServletRequest
 import jakarta.servlet.http.HttpServletResponse
+import org.example.model.Role
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken
 import org.springframework.security.core.authority.SimpleGrantedAuthority
 import org.springframework.security.core.context.SecurityContextHolder
@@ -25,9 +26,10 @@ class JwtFilter(private val jwtUtil: JwtUtil) : OncePerRequestFilter() {
 
         if (token != null && jwtUtil.isValid(token)) {
             val username = jwtUtil.extractUsername(token)
-            val auth = UsernamePasswordAuthenticationToken(
-                username, null, listOf(SimpleGrantedAuthority("ROLE_USER"))
-            )
+            val role = jwtUtil.extractRole(token) ?: Role.RIDER
+            val authorities = mutableListOf(SimpleGrantedAuthority("ROLE_RIDER"))
+            if (role == Role.DRIVER) authorities.add(SimpleGrantedAuthority("ROLE_DRIVER"))
+            val auth = UsernamePasswordAuthenticationToken(username, null, authorities)
             SecurityContextHolder.getContext().authentication = auth
         }
 

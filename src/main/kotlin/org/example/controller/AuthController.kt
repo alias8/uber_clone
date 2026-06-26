@@ -1,15 +1,15 @@
 package org.example.controller
 
-import jakarta.servlet.http.Cookie
 import jakarta.servlet.http.HttpServletResponse
-import org.springframework.beans.factory.annotation.Value
 import org.example.dto.AuthResponse
 import org.example.dto.LoginRequest
 import org.example.dto.MeResponse
 import org.example.dto.RegisterRequest
+import org.example.dto.SwitchModeRequest
+import org.example.model.Role
 import org.example.model.User
 import org.example.repository.UserRepository
-import org.example.security.JwtUtil
+import org.example.security.JwtCookieService
 import org.springframework.http.HttpStatus
 import org.springframework.http.ResponseEntity
 import org.springframework.security.core.annotation.AuthenticationPrincipal
@@ -25,8 +25,7 @@ import org.springframework.web.bind.annotation.RestController
 class AuthController(
     private val userRepository: UserRepository,
     private val passwordEncoder: PasswordEncoder,
-    private val jwtUtil: JwtUtil,
-    @param:Value("\${cookie.secure}") private val cookieSecure: Boolean
+    private val jwtCookieService: JwtCookieService
 ) {
 
     @PostMapping("/register")
@@ -37,11 +36,12 @@ class AuthController(
         if (userRepository.existsByUsername(request.username)) {
             return ResponseEntity.status(HttpStatus.CONFLICT).build()
         }
-        val user = User(username = request.username, passwordHash = passwordEncoder.encode(request.password))
-        userRepository.save(user)
-        val token = jwtUtil.generate(user.username)
-        response.addCookie(authCookie(token))
-        return ResponseEntity.status(HttpStatus.CREATED).body(AuthResponse(token))
+        val user = userRepository.save(
+            User(username = request.username, passwordHash = passwordEncoder.encode(request.password))
+        )
+        val cookie = jwtCookieService.issueTokenCookie(user.username, Role.RIDER)
+        response.addCookie(cookie)
+        return ResponseEntity.status(HttpStatus.CREATED).body(AuthResponse(cookie.value))
     }
 
     @PostMapping("/login")
@@ -56,9 +56,30 @@ class AuthController(
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build()
         }
 
-        val token = jwtUtil.generate(user.username)
-        response.addCookie(authCookie(token))
-        return ResponseEntity.ok(AuthResponse(token))
+        val cookie = jwtCookieService.issueTokenCookie(user.username, user.role)
+        response.addCookie(cookie)
+        return ResponseEntity.ok(AuthResponse(cookie.value))
+    }
+
+    @PostMapping("/switch-mode")
+    fun switchMode(
+        @RequestBody request: SwitchModeRequest,
+        @AuthenticationPrincipal username: String,
+        response: HttpServletResponse
+    ): ResponseEntity<AuthResponse> {
+        val requestedMode = runCatching { Role.valueOf(request.mode.uppercase()) }.getOrElse {
+            return ResponseEntity.badRequest().build()
+        }
+        if (requestedMode == Role.DRIVER) {
+            val user = userRepository.findByUsername(username)
+                ?: return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build()
+            if (user.role != Role.DRIVER) {
+                return ResponseEntity.status(HttpStatus.FORBIDDEN).build()
+            }
+        }
+        val cookie = jwtCookieService.issueTokenCookie(username, requestedMode)
+        response.addCookie(cookie)
+        return ResponseEntity.ok(AuthResponse(cookie.value))
     }
 
     @GetMapping("/me")
@@ -66,12 +87,5 @@ class AuthController(
         val user = userRepository.findByUsername(username)
             ?: return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build()
         return ResponseEntity.ok(MeResponse(userId = user.id))
-    }
-
-    private fun authCookie(token: String) = Cookie("auth_token", token).apply {
-        isHttpOnly = true
-        secure = cookieSecure
-        path = "/"
-        maxAge = (jwtUtil.expirationMs / 1000).toInt()
     }
 }
