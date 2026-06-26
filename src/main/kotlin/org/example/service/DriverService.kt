@@ -17,6 +17,7 @@ import org.springframework.stereotype.Service
 import org.springframework.web.server.ResponseStatusException
 
 private const val DRIVER_GEO_KEY = "drivers:locations"
+private const val DRIVER_AVAILABLE_SET = "drivers:available"
 
 private val ACTIVE_RIDE_STATUSES = listOf(RideStatus.MATCHED, RideStatus.IN_PROGRESS)
 
@@ -51,15 +52,33 @@ class DriverService(
     fun goOnline(userId: String, lat: Double, lng: Double): Driver {
         val driver = getProfile(userId)
         geo.add(DRIVER_GEO_KEY, Point(lng, lat), userId)
-        return driverRepository.save(driver.copy(isAvailable = true))
+        return markAvailable(driver)
     }
 
     fun goOffline(userId: String): Driver {
         val driver = getProfile(userId)
         redisTemplate.opsForZSet().remove(DRIVER_GEO_KEY, userId)
-        val saved = driverRepository.save(driver.copy(isAvailable = false))
+        val saved = markUnavailable(driver)
         emitterRegistry.complete(userId)
         return saved
+    }
+
+    fun markAvailable(userId: String) {
+        driverRepository.findById(userId).ifPresent { markAvailable(it) }
+    }
+
+    fun markUnavailable(userId: String) {
+        driverRepository.findById(userId).ifPresent { markUnavailable(it) }
+    }
+
+    private fun markAvailable(driver: Driver): Driver {
+        redisTemplate.opsForSet().add(DRIVER_AVAILABLE_SET, driver.userId)
+        return driverRepository.save(driver.copy(isAvailable = true))
+    }
+
+    private fun markUnavailable(driver: Driver): Driver {
+        redisTemplate.opsForSet().remove(DRIVER_AVAILABLE_SET, driver.userId)
+        return driverRepository.save(driver.copy(isAvailable = false))
     }
 
     fun updateLocation(userId: String, lat: Double, lng: Double) {
@@ -81,14 +100,8 @@ class DriverService(
             args
         ) ?: return emptyList()
 
-        val availableIds = driverRepository.findByIsAvailableTrue().map { it.userId }.toSet()
-
         return results.content
-            .filter { it.content.name in availableIds }
+            .filter { redisTemplate.opsForSet().isMember(DRIVER_AVAILABLE_SET, it.content.name) == true }
             .map { NearbyDriverResponse(driverId = it.content.name, distanceKm = it.distance.value) }
     }
-
-    // Returns the nearest available driver's userId, or null if none found within radius
-    fun findNearestAvailableDriver(lat: Double, lng: Double, radiusKm: Double = 5.0): String? =
-        findNearby(lat, lng, radiusKm).firstOrNull()?.driverId
 }

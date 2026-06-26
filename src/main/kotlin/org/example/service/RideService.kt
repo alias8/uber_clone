@@ -19,6 +19,7 @@ import kotlin.math.*
 class RideService(
     private val rideRepository: RideRepository,
     private val driverRepository: DriverRepository,
+    private val driverService: DriverService,
     private val surgeService: SurgeService,
     private val kafkaEventProducer: KafkaEventProducer
 ) {
@@ -55,7 +56,7 @@ class RideService(
         }
 
         try {
-            driverRepository.save(driver.copy(isAvailable = false))
+            driverService.markUnavailable(driverId)
             val saved = rideRepository.save(ride.copy(driverId = driverId, status = RideStatus.MATCHED))
             kafkaEventProducer.publishRideAccepted(saved.id)
             return saved
@@ -88,10 +89,7 @@ class RideService(
             ride.copy(status = RideStatus.COMPLETED, fare = ride.estimatedFare, completedAt = Instant.now())
         )
 
-        driverRepository.findById(driverId).ifPresent { driver ->
-            driverRepository.save(driver.copy(isAvailable = true))
-        }
-
+        driverService.markAvailable(driverId)
         kafkaEventProducer.publishRideCompleted(saved.id)
         return saved
     }
@@ -105,11 +103,7 @@ class RideService(
             throw ResponseStatusException(HttpStatus.FORBIDDEN, "Not a participant in this ride")
         }
 
-        ride.driverId?.let { dId ->
-            driverRepository.findById(dId).ifPresent { driver ->
-                driverRepository.save(driver.copy(isAvailable = true))
-            }
-        }
+        ride.driverId?.let { driverService.markAvailable(it) }
 
         val saved = rideRepository.save(ride.copy(status = RideStatus.CANCELLED))
         kafkaEventProducer.publishRideCancelled(saved.id)

@@ -15,13 +15,19 @@ The real limits for SSE:
 
 Implication: drivers can connect to any instance. No sticky sessions needed.
 
-## Driver availability cross-reference (scalability bug)
+## Driver availability — Redis Set vs Postgres table scan
 
-`DriverService.findNearby` does two things:
+Most `.find` calls in this codebase are fast because they filter by primary key or an indexed foreign key — `findById(rideId)`, `findByDriverId(...)`, `findByUsername(...)`. These are O(1) or bounded point lookups.
+
+`DriverService.findNearby` had a different problem. It did two things:
 1. Redis `GEORADIUS` — returns nearby drivers by location (fast, O(log N))
-2. `driverRepository.findByIsAvailableTrue()` — loads **all** available drivers from Postgres to cross-reference
+2. `driverRepository.findByIsAvailableTrue()` — loaded **every** available driver from Postgres with no geographic filter, just to cross-reference against the geo results
 
-As driver count grows this becomes a full table scan on every dispatch. Fix: store availability in Redis as a Set (`drivers:available`) and use `SISMEMBER` per result instead of loading the whole Postgres table.
+There was no "give me available drivers near this coordinate" query — it pulled the entire available driver population into memory on every dispatch. A full table scan on every ride request.
+
+**Fix implemented**: online/offline status is now mirrored in a Redis Set (`drivers:available`). `goOnline` does `SADD`, `goOffline`/ride accept/complete/cancel do `SREM` or `SADD`. `findNearby` now does an `SISMEMBER` call per geo result instead of the table scan — at most 20 Redis lookups at sub-millisecond each.
+
+**Why keep `isAvailable` in Postgres at all?** It's the source of truth for driver profiles and ride history queries. Redis is the fast read path for dispatch; Postgres is the durable record.
 
 ## Postgres connection pool
 

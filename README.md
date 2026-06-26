@@ -22,7 +22,7 @@ A ride-hailing backend built with Kotlin and Spring Boot. Covers the core Uber f
 
 **Surge pricing** — Redis-backed surge multiplier keyed by geographic area. Multiplier scales with local demand and is cached with a TTL.
 
-**Driver management** — drivers register with vehicle details, toggle online/offline status, update their GPS location, and can query for nearby online drivers within a configurable radius.
+**Driver management** — drivers register with vehicle details, toggle online/offline status, update their GPS location, and can query for nearby online drivers within a configurable radius. Online drivers are tracked in a Redis geo-index for proximity queries and a Redis Set (`drivers:available`) for O(1) availability checks — no Postgres table scans on dispatch.
 
 **Ratings** — after a ride completes, riders and drivers can rate each other. Average ratings are stored on the driver profile.
 
