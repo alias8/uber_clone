@@ -28,7 +28,8 @@ class DispatchService(
                 "pickupLat" to ride.pickupLat,
                 "pickupLng" to ride.pickupLng,
                 "dropoffLat" to ride.dropoffLat,
-                "dropoffLng" to ride.dropoffLng
+                "dropoffLng" to ride.dropoffLng,
+                "estimatedFare" to ride.estimatedFare
             )
         )
         nearby.forEach { driver ->

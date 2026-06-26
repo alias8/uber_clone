@@ -33,6 +33,8 @@ data class Ride(
     @Column(nullable = false)
     val status: RideStatus = RideStatus.REQUESTED,
 
+    val estimatedFare: BigDecimal? = null,
+
     // Null until ride completes
     val fare: BigDecimal? = null,
 

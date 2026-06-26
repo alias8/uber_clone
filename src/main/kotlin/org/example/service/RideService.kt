@@ -30,7 +30,8 @@ class RideService(
             dropoffLat = request.dropoffLat,
             dropoffLng = request.dropoffLng
         )
-        val saved = rideRepository.save(ride)
+        val estimated = calculateFare(ride)
+        val saved = rideRepository.save(ride.copy(estimatedFare = estimated))
         kafkaEventProducer.publishRideRequested(saved.id)
         return saved
     }

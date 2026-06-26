@@ -21,6 +21,7 @@ data class RideResponse(
     val dropoffLat: Double,
     val dropoffLng: Double,
     val status: RideStatus,
+    val estimatedFare: BigDecimal?,
     val fare: BigDecimal?,
     val requestedAt: Instant,
     val completedAt: Instant?
@@ -35,6 +36,7 @@ fun Ride.toResponse() = RideResponse(
     dropoffLat = dropoffLat,
     dropoffLng = dropoffLng,
     status = status,
+    estimatedFare = estimatedFare,
     fare = fare,
     requestedAt = requestedAt,
     completedAt = completedAt
