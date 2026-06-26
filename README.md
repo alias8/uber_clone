@@ -1,6 +1,6 @@
-# Kotlin Backend Boilerplate
+# Uber Clone — Kotlin Backend
 
-A personal starting point for Kotlin backend apps. Wires together the services I reach for most often so I can clone and build on top rather than scaffold from scratch.
+A ride-hailing backend built with Kotlin and Spring Boot. Covers the core Uber flow: riders request trips, drivers come online and accept them, fares are calculated from GPS distance with surge pricing, and both sides can rate each other after completion.
 
 ## Stack
 
@@ -14,19 +14,19 @@ A personal starting point for Kotlin backend apps. Wires together the services I
 | Auth | JWT (JJWT 0.12) via HttpOnly cookies |
 | Build | Gradle (Kotlin DSL) |
 
-## What's included
+## Features
 
-**Auth** — register, login, and `/auth/me`. JWTs are issued on login/register, stored as HttpOnly cookies (30-day expiry by default), and validated on every request via a servlet filter. Passwords are BCrypt-hashed.
+**Rides** — riders request a trip with pickup/dropoff coordinates. The service auto-assigns the nearest available driver within 5 km. Rides move through a status machine: `REQUESTED → ACCEPTED → IN_PROGRESS → COMPLETED` (or `CANCELLED`). Fare is calculated using the Haversine formula plus a surge multiplier.
 
-**Security** — Spring Security in stateless mode. `/auth/register` and `/auth/login` are public; everything else requires a valid JWT.
+**Surge pricing** — Redis-backed surge multiplier keyed by geographic area. Multiplier scales with local demand and is cached with a TTL.
 
-**User model** — a single `User` entity backed by Postgres with JPA auto-DDL so the schema creates itself on first boot.
+**Driver management** — drivers register with vehicle details, toggle online/offline status, update their GPS location, and can query for nearby online drivers within a configurable radius.
 
-**Redis utilities** — helper functions for list-based caching with TTL and size capping. Stub these out into real cache keys for whatever domain you're building.
+**Ratings** — after a ride completes, riders and drivers can rate each other. Average ratings are stored on the driver profile.
 
-**Kafka producer/consumer** — a typed event producer and a `@KafkaListener` consumer stubbed to the `post-created` topic. Drop your async fan-out or processing logic into the consumer body.
+**Auth** — register, login, and `/auth/me`. JWTs are issued on login/register, stored as HttpOnly cookies (30-day expiry), and validated on every request via a servlet filter. Passwords are BCrypt-hashed.
 
-**Health endpoint** — `GET /health` returns 200, useful for load balancer checks.
+**Kafka events** — ride lifecycle events are published to Kafka for downstream consumers (notifications, analytics, etc.).
 
 ## Running locally
 
@@ -40,8 +40,6 @@ The app starts on port `8080`. Default datasource points to `localhost:5432/twit
 
 ## Configuration
 
-All secrets and connection strings are externalised. Set these env vars to override the defaults:
-
 | Variable | Default | Description |
 |---|---|---|
 | `DATABASE_URL` | `jdbc:postgresql://localhost:5432/twitter` | JDBC connection string |
@@ -50,23 +48,36 @@ All secrets and connection strings are externalised. Set these env vars to overr
 | `JWT_SECRET` | `change-me-...` | HMAC signing key — **change in prod** |
 | `COOKIE_SECURE` | `false` | Set `true` in prod (requires HTTPS) |
 
-Kafka defaults to `localhost:9092` and Redis to `localhost:6379`. Override in `application.properties` as needed.
+Kafka defaults to `localhost:9092` and Redis to `localhost:6379`.
 
 ## API
 
 ```
-POST /auth/register   { username, password }  → 201 + sets auth cookie
-POST /auth/login      { username, password }  → 200 + sets auth cookie
-GET  /auth/me                                 → { userId }
-GET  /health                                  → 200
+# Auth
+POST /auth/register        { username, password }           → 201 + sets auth cookie
+POST /auth/login           { username, password }           → 200 + sets auth cookie
+GET  /auth/me                                               → { userId }
+
+# Rides
+POST /rides                { pickupLat, pickupLng, dropoffLat, dropoffLng }  → 201 (auto-assigns driver)
+GET  /rides/{id}                                            → ride details
+POST /rides/{id}/accept    (driver)                         → moves to ACCEPTED
+POST /rides/{id}/start     (driver)                         → moves to IN_PROGRESS
+POST /rides/{id}/complete  (driver)                         → moves to COMPLETED, calculates fare
+POST /rides/{id}/cancel                                     → moves to CANCELLED
+POST /rides/{id}/rate      { rating, comment }              → submits rating
+GET  /rides/history                                         → paginated ride history for caller
+
+# Drivers
+POST /driver/register      { vehicleMake, vehicleModel, licensePlate }  → 201
+GET  /driver/profile                                        → driver profile + avg rating
+POST /driver/mode/on       { lat, lng }                     → go online
+POST /driver/mode/off                                       → go offline
+POST /driver/location      { lat, lng }                     → update GPS location
+GET  /driver/rides                                          → driver's ride history
+GET  /driver/nearby        { lat, lng, radiusKm }           → list of online nearby drivers
+
+GET  /health                                                → 200
 ```
 
-All other routes require the `auth_token` cookie (or `Authorization: Bearer <token>` header).
-
-## Adapting for a new project
-
-1. Rename the package from `org.example` to your own.
-2. Swap the database name in `application.properties`.
-3. Replace the `RedisUtils` stub keys with your domain's cache keys.
-4. Replace the Kafka `post-created` topic and consumer body with your event types.
-5. Add entities, repositories, services, and controllers on top.
+All routes except `/auth/register`, `/auth/login`, and `/health` require the `auth_token` cookie (or `Authorization: Bearer <token>` header).
