@@ -57,6 +57,26 @@ Browsers cap HTTP/1.1 connections per origin at 6. The SSE stream consumes one, 
 
 ---
 
+## Roles & JWT claims
+
+**Two separate concepts:**
+- `user.role` in Postgres — permanent capability record. `RIDER` by default; set to `DRIVER` once when `POST /driver/register` succeeds. Never decremented.
+- `role` claim in the JWT — the user's *active mode*. Changes on every `POST /auth/switch-mode` call without touching the DB.
+
+**Why not look up the role from DB on every request?**
+That was the first implementation. It works but adds an indexed PK lookup on every single request for a value that almost never changes. Embedding it in the JWT means zero DB overhead per request — the role is verified as part of JWT signature validation, which happens anyway.
+
+**Why not embed it in the JWT permanently and never change it?**
+Because users switch modes. A driver switching to rider mode needs a token that only has `ROLE_RIDER`, so driver endpoints reject them. Reissuing the cookie on mode switch is the natural point to update the claim.
+
+**`@PreAuthorize` vs URL-based security in `SecurityFilterChain`**
+URL-based (`antMatchers`) is coarse — you match paths to roles. `@PreAuthorize` is method-level and can express richer rules (ownership checks, combining roles, SpEL expressions). For this codebase, `@PreAuthorize` is cleaner because the same path prefix (`/rides/{id}/...`) is used by both riders and drivers for different operations.
+
+**`hasRole('DRIVER')` vs `hasAuthority('ROLE_DRIVER')`**
+`hasRole` automatically prepends `ROLE_` — so `hasRole('DRIVER')` checks for the authority `ROLE_DRIVER`. `hasAuthority` checks the string exactly as given. Convention is to use `hasRole` with unprefixed names and always store authorities with the `ROLE_` prefix.
+
+---
+
 ## Interview Questions
 
 ### "Design a ride-hailing dispatch system"

@@ -1,7 +1,3 @@
-Authorization (DRIVER vs RIDER roles)                                                                                                                  
-Right now any authenticated user can call both rider and driver endpoints. Adding Spring Security roles with @PreAuthorize teaches you RBAC — common in
-every real system.
-
 Database indexes                                                                                                                                       
 The rides table has no indexes on riderId, driverId, or status. The history queries do full table scans. Adding @Index annotations and understanding   
 when indexes help vs. hurt (write overhead) is a core backend topic.

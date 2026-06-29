@@ -26,7 +26,7 @@ A ride-hailing backend built with Kotlin and Spring Boot. Covers the core Uber f
 
 **Ratings** — after a ride completes, riders and drivers can rate each other. Average ratings are stored on the driver profile.
 
-**Auth** — register, login, and `/auth/me`. JWTs are issued on login/register, stored as HttpOnly cookies (30-day expiry), and validated on every request via a servlet filter. Passwords are BCrypt-hashed.
+**Auth & roles** — register, login, and `/auth/me`. JWTs are issued as HttpOnly cookies and carry a `role` claim (`RIDER` or `DRIVER`). All users start as `RIDER`. Calling `POST /driver/register` permanently upgrades the DB role to `DRIVER` and reissues the cookie. Drivers can toggle between modes with `POST /auth/switch-mode` — this only changes the active JWT claim, not the DB role. `@PreAuthorize` guards ensure riders can't call driver endpoints and vice versa. Passwords are BCrypt-hashed.
 
 **Kafka events** — `ride-requested` triggers async dispatch; `ride-accepted`, `ride-completed`, and `ride-cancelled` are consumed for downstream work (payment processing, analytics) and to close the rider's live location stream.
 
@@ -56,8 +56,9 @@ Kafka defaults to `localhost:9092` and Redis to `localhost:6379`.
 
 ```
 # Auth
-POST /auth/register        { username, password }           → 201 + sets auth cookie
+POST /auth/register        { username, password }           → 201 + sets auth cookie (RIDER)
 POST /auth/login           { username, password }           → 200 + sets auth cookie
+POST /auth/switch-mode     { mode: "RIDER"|"DRIVER" }       → reissues cookie with new active mode
 GET  /auth/me                                               → { userId }
 
 # Rides
@@ -72,7 +73,7 @@ GET  /rides/{id}/location                                   → SSE stream of dr
 GET  /rides/history                                         → paginated ride history for caller
 
 # Drivers
-POST /driver/register      { vehicleMake, vehicleModel, licensePlate }  → 201
+POST /driver/register      { vehicleMake, vehicleModel, licensePlate }  → 201, upgrades role to DRIVER
 GET  /driver/profile                                        → driver profile + avg rating
 POST /driver/mode/on       { lat, lng }                     → go online
 POST /driver/mode/off                                       → go offline
