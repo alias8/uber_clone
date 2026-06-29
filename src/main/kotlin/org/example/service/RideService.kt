@@ -24,6 +24,10 @@ class RideService(
     private val kafkaEventProducer: KafkaEventProducer
 ) {
     fun requestRide(riderId: String, request: RideRequest): Ride {
+        val activeStatuses = listOf(RideStatus.REQUESTED, RideStatus.MATCHED, RideStatus.IN_PROGRESS)
+        if (rideRepository.existsByRiderIdAndStatusIn(riderId, activeStatuses)) {
+            throw ResponseStatusException(HttpStatus.CONFLICT, "Rider already has an active ride")
+        }
         val ride = Ride(
             riderId = riderId,
             pickupLat = request.pickupLat,
