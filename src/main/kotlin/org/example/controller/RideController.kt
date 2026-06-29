@@ -6,6 +6,7 @@ import org.example.dto.RideResponse
 import org.example.dto.toResponse
 import org.example.repository.RideRepository
 import org.example.repository.UserRepository
+import org.example.service.RateLimiterService
 import org.example.service.RatingService
 import org.example.service.RideService
 import org.springframework.data.domain.Page
@@ -23,6 +24,7 @@ import org.springframework.web.server.ResponseStatusException
 class RideController(
     private val rideService: RideService,
     private val ratingService: RatingService,
+    private val rateLimiterService: RateLimiterService,
     private val rideRepository: RideRepository,
     private val userRepository: UserRepository
 ) {
@@ -37,6 +39,9 @@ class RideController(
         @AuthenticationPrincipal username: String
     ): ResponseEntity<RideResponse> {
         val userId = resolveUserId(username)
+        if (!rateLimiterService.allowRideRequest(userId)) {
+            throw ResponseStatusException(HttpStatus.TOO_MANY_REQUESTS, "Too many ride requests — try again shortly")
+        }
         val ride = rideService.requestRide(userId, request)
         return ResponseEntity.status(HttpStatus.CREATED).body(ride.toResponse())
     }

@@ -1,7 +1,3 @@
-Rate limiting with Redis                                                                                                                               
-Prevent riders from spamming POST /rides. The sliding window counter pattern using Redis INCR + EXPIRE is a classic interview question and reuses the  
-Redis knowledge you already have.
-
 Retry for unmatched rides                                                                                                                              
 If no drivers are nearby, the ride sits as REQUESTED forever. A Spring @Scheduled job that periodically finds stale REQUESTED rides and re-publishes to
 Kafka teaches scheduling, idempotency, and resilience.

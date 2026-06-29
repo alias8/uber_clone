@@ -1,5 +1,6 @@
 package org.example.controller
 
+import jakarta.servlet.http.HttpServletRequest
 import jakarta.servlet.http.HttpServletResponse
 import org.example.dto.AuthResponse
 import org.example.dto.LoginRequest
@@ -10,6 +11,7 @@ import org.example.model.Role
 import org.example.model.User
 import org.example.repository.UserRepository
 import org.example.security.JwtCookieService
+import org.example.service.RateLimiterService
 import org.springframework.http.HttpStatus
 import org.springframework.http.ResponseEntity
 import org.springframework.security.core.annotation.AuthenticationPrincipal
@@ -19,20 +21,29 @@ import org.springframework.web.bind.annotation.PostMapping
 import org.springframework.web.bind.annotation.RequestBody
 import org.springframework.web.bind.annotation.RequestMapping
 import org.springframework.web.bind.annotation.RestController
+import org.springframework.web.server.ResponseStatusException
 
 @RestController
 @RequestMapping("/auth")
 class AuthController(
     private val userRepository: UserRepository,
     private val passwordEncoder: PasswordEncoder,
-    private val jwtCookieService: JwtCookieService
+    private val jwtCookieService: JwtCookieService,
+    private val rateLimiterService: RateLimiterService
 ) {
+    private fun clientIp(request: HttpServletRequest): String =
+        request.getHeader("X-Forwarded-For")?.split(",")?.first()?.trim() ?: request.remoteAddr
+
 
     @PostMapping("/register")
     fun register(
         @RequestBody request: RegisterRequest,
+        httpRequest: HttpServletRequest,
         response: HttpServletResponse
     ): ResponseEntity<AuthResponse> {
+        if (!rateLimiterService.allowAuthAttempt(clientIp(httpRequest))) {
+            throw ResponseStatusException(HttpStatus.TOO_MANY_REQUESTS, "Too many attempts — try again later")
+        }
         if (userRepository.existsByUsername(request.username)) {
             return ResponseEntity.status(HttpStatus.CONFLICT).build()
         }
@@ -47,8 +58,12 @@ class AuthController(
     @PostMapping("/login")
     fun login(
         @RequestBody request: LoginRequest,
+        httpRequest: HttpServletRequest,
         response: HttpServletResponse
     ): ResponseEntity<AuthResponse> {
+        if (!rateLimiterService.allowAuthAttempt(clientIp(httpRequest))) {
+            throw ResponseStatusException(HttpStatus.TOO_MANY_REQUESTS, "Too many attempts — try again later")
+        }
         val user = userRepository.findByUsername(request.username)
             ?: return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build()
 
