@@ -20,5 +20,7 @@ data class User(
     val role: Role = Role.RIDER,
 
     // Rating as a rider — null until first rating received
-    val avgRating: Double? = null
+    val avgRating: Double? = null,
+
+    val ratingCount: Int = 0
 )

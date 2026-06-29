@@ -12,6 +12,14 @@ import org.springframework.web.server.ResponseStatusException
 import java.math.BigDecimal
 import java.math.RoundingMode
 
+private fun incrementalAvg(oldAvg: Double?, oldCount: Int, newScore: Int): Double {
+    val avg = oldAvg ?: 0.0
+    return (avg * oldCount + newScore) / (oldCount + 1)
+}
+
+private fun Double.roundTo2(): Double =
+    BigDecimal(this).setScale(2, RoundingMode.HALF_UP).toDouble()
+
 @Service
 class RatingService(
     private val ratingRepository: RatingRepository,
@@ -45,16 +53,13 @@ class RatingService(
 
         ratingRepository.save(Rating(rideId = rideId, fromUserId = fromUserId, toUserId = toUserId, score = score, comment = comment))
 
-        // Recalculate and persist the recipient's new average rating
-        val newAvg = ratingRepository.avgScoreForUser(toUserId)
-            ?.let { BigDecimal(it).setScale(2, RoundingMode.HALF_UP).toDouble() }
-
-        // Update whichever profile the recipient has
         driverRepository.findById(toUserId).ifPresent { driver ->
-            driverRepository.save(driver.copy(avgRating = newAvg))
+            val newAvg = incrementalAvg(driver.avgRating, driver.ratingCount, score).roundTo2()
+            driverRepository.save(driver.copy(avgRating = newAvg, ratingCount = driver.ratingCount + 1))
         }
         userRepository.findById(toUserId).ifPresent { user ->
-            userRepository.save(user.copy(avgRating = newAvg))
+            val newAvg = incrementalAvg(user.avgRating, user.ratingCount, score).roundTo2()
+            userRepository.save(user.copy(avgRating = newAvg, ratingCount = user.ratingCount + 1))
         }
     }
 }

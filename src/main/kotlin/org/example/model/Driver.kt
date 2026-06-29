@@ -18,5 +18,7 @@ data class Driver(
     val isAvailable: Boolean = false,
 
     // Rating as a driver — null until first rating received
-    val avgRating: Double? = null
+    val avgRating: Double? = null,
+
+    val ratingCount: Int = 0
 )
