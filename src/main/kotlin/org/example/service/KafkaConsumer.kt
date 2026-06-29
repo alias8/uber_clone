@@ -19,6 +19,7 @@ class KafkaConsumer(
     @KafkaListener(topics = ["ride-requested"], groupId = "feed-fanout-group")
     fun onRideRequested(rideId: String) {
         val ride = rideRepository.findById(rideId).orElse(null) ?: return
+        if (ride.status != RideStatus.REQUESTED) return
         log.info("Ride requested: id={} rider={} status={}", ride.id, ride.riderId, ride.status)
         dispatchService.fanoutToNearbyDrivers(ride)
     }

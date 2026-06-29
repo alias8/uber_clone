@@ -39,6 +39,7 @@ class RideController(
         @AuthenticationPrincipal username: String
     ): ResponseEntity<RideResponse> {
         val userId = resolveUserId(username)
+        // Prevents rider from requesting, then cancelling rapidly 
         if (!rateLimiterService.allowRideRequest(userId)) {
             throw ResponseStatusException(HttpStatus.TOO_MANY_REQUESTS, "Too many ride requests — try again shortly")
         }
