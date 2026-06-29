@@ -1,11 +1,3 @@
-Database indexes                                                                                                                                       
-The rides table has no indexes on riderId, driverId, or status. The history queries do full table scans. Adding @Index annotations and understanding   
-when indexes help vs. hurt (write overhead) is a core backend topic.
-
-Flyway migrations                                                                                                                                      
-JPA auto-DDL is fine for dev but dangerous in production — it can drop columns. Flyway teaches you how real teams manage schema changes safely. Very   
-common in interviews.
-
 Rate limiting with Redis                                                                                                                               
 Prevent riders from spamming POST /rides. The sliding window counter pattern using Redis INCR + EXPIRE is a classic interview question and reuses the  
 Redis knowledge you already have.
