@@ -5,6 +5,7 @@ import org.example.model.RideStatus
 import org.example.dto.RideRequest
 import org.example.repository.DriverRepository
 import org.example.repository.RideRepository
+import org.example.utils.haversineKm
 import org.springframework.http.HttpStatus
 import org.springframework.orm.ObjectOptimisticLockingFailureException
 import org.springframework.stereotype.Service
@@ -13,7 +14,6 @@ import org.springframework.web.server.ResponseStatusException
 import java.math.BigDecimal
 import java.math.RoundingMode
 import java.time.Instant
-import kotlin.math.*
 
 @Service
 class RideService(
@@ -124,11 +124,3 @@ class RideService(
     }
 }
 
-fun haversineKm(lat1: Double, lng1: Double, lat2: Double, lng2: Double): Double {
-    val r = 6371.0
-    val dLat = Math.toRadians(lat2 - lat1)
-    val dLng = Math.toRadians(lng2 - lng1)
-    val a = sin(dLat / 2).pow(2) +
-            cos(Math.toRadians(lat1)) * cos(Math.toRadians(lat2)) * sin(dLng / 2).pow(2)
-    return r * 2 * asin(sqrt(a))
-}

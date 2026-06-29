@@ -6,6 +6,8 @@ import org.example.model.Driver
 import org.example.model.RideStatus
 import org.example.repository.DriverRepository
 import org.example.repository.RideRepository
+import org.example.utils.etaMinutes
+import org.example.utils.haversineKm
 import org.springframework.data.geo.Circle
 import org.springframework.data.geo.Distance
 import org.springframework.data.geo.Metrics
@@ -85,8 +87,14 @@ class DriverService(
         getProfile(userId)
         geo.add(DRIVER_GEO_KEY, Point(lng, lat), userId)
         rideRepository.findFirstByDriverIdAndStatusIn(userId, ACTIVE_RIDE_STATUSES)
-            ?.let { emitterRegistry.emit(it.id, "driver_location", """{"lat":$lat,"lng":$lng}""") }
+            ?.let { ride ->
+                val eta = etaMinutes(haversineKm(lat, lng, ride.dropoffLat, ride.dropoffLng))
+                emitterRegistry.emit(ride.id, "driver_location", """{"lat":$lat,"lng":$lng,"etaMinutes":$eta}""")
+            }
     }
+
+    fun getDriverLocation(driverId: String): org.springframework.data.geo.Point? =
+        geo.position(DRIVER_GEO_KEY, driverId)?.firstOrNull()
 
     fun findNearby(lat: Double, lng: Double, radiusKm: Double): List<NearbyDriverResponse> {
         val args = RedisGeoCommands.GeoRadiusCommandArgs.newGeoRadiusArgs()

@@ -2,6 +2,8 @@ package org.example.service
 
 import org.example.model.RideStatus
 import org.example.repository.RideRepository
+import org.example.utils.etaMinutes
+import org.example.utils.haversineKm
 import org.slf4j.LoggerFactory
 import org.springframework.data.redis.core.RedisTemplate
 import org.springframework.kafka.annotation.KafkaListener
@@ -12,6 +14,7 @@ class KafkaConsumer(
     private val rideRepository: RideRepository,
     private val dispatchService: DispatchService,
     private val emitterRegistry: EmitterRegistry,
+    private val driverService: DriverService,
     private val redisTemplate: RedisTemplate<String, String>
 ) {
     private val log = LoggerFactory.getLogger(KafkaConsumer::class.java)
@@ -28,6 +31,15 @@ class KafkaConsumer(
     fun onRideAccepted(rideId: String) {
         val ride = rideRepository.findById(rideId).orElse(null) ?: return
         log.info("Ride accepted: id={} driver={} rider={}", ride.id, ride.driverId, ride.riderId)
+
+        ride.driverId?.let { driverId ->
+            driverService.getDriverLocation(driverId)?.let { pos ->
+                // pos.x = lng, pos.y = lat (Spring Data Geo convention)
+                val eta = etaMinutes(haversineKm(pos.y, pos.x, ride.pickupLat, ride.pickupLng))
+                emitterRegistry.emit(ride.id, "driver_eta_to_pickup", """{"etaMinutes":$eta}""")
+            }
+        }
+
         val dispatchedKey = "$DISPATCHED_KEY_PREFIX$rideId"
         val payload = """{"rideId":"$rideId"}"""
         redisTemplate.opsForSet().members(dispatchedKey)

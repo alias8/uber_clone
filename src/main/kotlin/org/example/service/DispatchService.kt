@@ -2,6 +2,7 @@ package org.example.service
 
 import com.fasterxml.jackson.databind.ObjectMapper
 import org.example.model.Ride
+import org.example.utils.etaMinutes
 import org.slf4j.LoggerFactory
 import org.springframework.data.redis.core.RedisTemplate
 import org.springframework.stereotype.Service
@@ -10,7 +11,6 @@ import java.util.concurrent.TimeUnit
 internal const val RIDE_OFFER_CHANNEL_PREFIX = "ride_offers:"
 internal const val DISPATCHED_KEY_PREFIX = "dispatched:"
 private const val DISPATCHED_TTL_MINUTES = 5L
-private const val AVERAGE_SPEED_KMH = 30.0
 
 @Service
 class DispatchService(
@@ -31,7 +31,7 @@ class DispatchService(
         redisTemplate.expire("$DISPATCHED_KEY_PREFIX${ride.id}", DISPATCHED_TTL_MINUTES, TimeUnit.MINUTES)
 
         nearby.forEach { driver ->
-            val etaMinutes = (driver.distanceKm / AVERAGE_SPEED_KMH * 60).toInt().coerceAtLeast(1)
+            val etaMinutes = etaMinutes(driver.distanceKm)
             val driverPayload = objectMapper.writeValueAsString(
                 mapOf(
                     "rideId" to ride.id,
