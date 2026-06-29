@@ -10,6 +10,7 @@ import java.util.concurrent.TimeUnit
 internal const val RIDE_OFFER_CHANNEL_PREFIX = "ride_offers:"
 internal const val DISPATCHED_KEY_PREFIX = "dispatched:"
 private const val DISPATCHED_TTL_MINUTES = 5L
+private const val AVERAGE_SPEED_KMH = 30.0
 
 @Service
 class DispatchService(
@@ -25,23 +26,25 @@ class DispatchService(
             log.warn("No nearby drivers for ride {}", ride.id)
             return
         }
-        val payload = objectMapper.writeValueAsString(
-            mapOf(
-                "rideId" to ride.id,
-                "pickupLat" to ride.pickupLat,
-                "pickupLng" to ride.pickupLng,
-                "dropoffLat" to ride.dropoffLat,
-                "dropoffLng" to ride.dropoffLng,
-                "estimatedFare" to ride.estimatedFare
-            )
-        )
         val driverIds = nearby.map { it.driverId }.toTypedArray()
         redisTemplate.opsForSet().add("$DISPATCHED_KEY_PREFIX${ride.id}", *driverIds)
         redisTemplate.expire("$DISPATCHED_KEY_PREFIX${ride.id}", DISPATCHED_TTL_MINUTES, TimeUnit.MINUTES)
 
         nearby.forEach { driver ->
-            redisTemplate.convertAndSend("$RIDE_OFFER_CHANNEL_PREFIX${driver.driverId}", payload)
-            log.info("Dispatched offer for ride {} to driver {} ({} km away)", ride.id, driver.driverId, driver.distanceKm)
+            val etaMinutes = (driver.distanceKm / AVERAGE_SPEED_KMH * 60).toInt().coerceAtLeast(1)
+            val driverPayload = objectMapper.writeValueAsString(
+                mapOf(
+                    "rideId" to ride.id,
+                    "pickupLat" to ride.pickupLat,
+                    "pickupLng" to ride.pickupLng,
+                    "dropoffLat" to ride.dropoffLat,
+                    "dropoffLng" to ride.dropoffLng,
+                    "estimatedFare" to ride.estimatedFare,
+                    "etaMinutes" to etaMinutes
+                )
+            )
+            redisTemplate.convertAndSend("$RIDE_OFFER_CHANNEL_PREFIX${driver.driverId}", driverPayload)
+            log.info("Dispatched offer for ride {} to driver {} ({} km away, {} min ETA)", ride.id, driver.driverId, driver.distanceKm, etaMinutes)
         }
     }
 }
