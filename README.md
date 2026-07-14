@@ -12,13 +12,14 @@ A ride-hailing backend built with Kotlin and Spring Boot. Covers the core Uber f
 | Cache | Redis (Spring Data Redis) |
 | Messaging | Kafka (Spring Kafka) |
 | Auth | JWT (JJWT 0.12) via HttpOnly cookies |
+| Migrations | Flyway |
 | Build | Gradle (Kotlin DSL) |
 
 ## Features
 
-**Dispatch** — when a rider requests a trip, the ride is saved and a Kafka event is published immediately so `POST /rides` returns fast. A Kafka consumer picks up the event asynchronously, finds all online drivers within 5 km using a Redis geo-index, and publishes a ride offer to each driver's Redis pub/sub channel (`ride_offers:{driverId}`). Drivers receive offers in real time over a persistent SSE connection (`GET /driver/offers`). The first driver to call `POST /rides/{id}/accept` gets the ride; concurrent accepts are handled safely with JPA optimistic locking.
+**Dispatch** — when a rider requests a trip, the ride is saved and a Kafka event is published immediately so `POST /rides` returns fast. A Kafka consumer picks up the event asynchronously, finds all online drivers within 5 km using a Redis geo-index, and publishes a ride offer to each driver's Redis pub/sub channel (`ride_offers:{driverId}`), including the driver's ETA to the rider. Drivers receive offers in real time over a persistent SSE connection (`GET /driver/offers`). The first driver to call `POST /rides/{id}/accept` gets the ride; concurrent accepts are handled safely with JPA optimistic locking. A scheduled job re-publishes any ride still stuck in `REQUESTED` after 2 minutes, so a dropped Kafka message or dispatch to zero available drivers doesn't strand a rider.
 
-**Rides** — rides move through a status machine: `REQUESTED → MATCHED → IN_PROGRESS → COMPLETED` (or `CANCELLED`). Fare is calculated once at request time using the Haversine distance formula plus the current surge multiplier, and locked in — the rider pays that price regardless of surge changes during the trip.
+**Rides** — rides move through a status machine: `REQUESTED → MATCHED → IN_PROGRESS → COMPLETED` (or `CANCELLED`). Fare is calculated once at request time using the Haversine distance formula plus the current surge multiplier, and locked in — the rider pays that price regardless of surge changes during the trip. Riders get a live ETA to pickup once a driver accepts, then a live ETA to the destination once the trip starts, both recalculated as the driver's GPS location updates.
 
 **Surge pricing** — Redis-backed surge multiplier keyed by geographic area. Multiplier scales with local demand and is cached with a TTL.
 
@@ -30,6 +31,8 @@ A ride-hailing backend built with Kotlin and Spring Boot. Covers the core Uber f
 
 **Kafka events** — `ride-requested` triggers async dispatch; `ride-accepted`, `ride-completed`, and `ride-cancelled` are consumed for downstream work (payment processing, analytics) and to close the rider's live location stream.
 
+**Rate limiting** — Redis-backed token buckets (Bucket4j) cap ride requests to 5/minute per rider and login/register attempts to 10/15 minutes per IP, so a retry loop or brute-force attempt can't hammer the API or the DB.
+
 ## Running locally
 
 **Prerequisites:** Java 21, PostgreSQL, Redis, Kafka running locally.
@@ -38,13 +41,13 @@ A ride-hailing backend built with Kotlin and Spring Boot. Covers the core Uber f
 ./gradlew bootRun
 ```
 
-The app starts on port `8080`. Default datasource points to `localhost:5432/twitter` — change the database name in `application.properties` or override via env vars.
+The app starts on port `8080`. Default datasource points to `localhost:5432/uber_clone` — change the database name in `application.properties` or override via env vars.
 
 ## Configuration
 
 | Variable | Default | Description |
 |---|---|---|
-| `DATABASE_URL` | `jdbc:postgresql://localhost:5432/twitter` | JDBC connection string |
+| `DATABASE_URL` | `jdbc:postgresql://localhost:5432/uber_clone` | JDBC connection string |
 | `DATABASE_USER` | `jameskirk` | DB username |
 | `DATABASE_PASSWORD` | `password` | DB password |
 | `JWT_SECRET` | `change-me-...` | HMAC signing key — **change in prod** |
@@ -86,3 +89,11 @@ GET  /health                                                → 200
 ```
 
 All routes except `/auth/register`, `/auth/login`, and `/health` require the `auth_token` cookie (or `Authorization: Bearer <token>` header).
+
+## Testing
+
+```bash
+./gradlew test
+```
+
+Unit tests currently cover the fare/ETA distance math in `GeoUtils` (Haversine distance, ETA estimation). Service-level tests are the next thing to add.
