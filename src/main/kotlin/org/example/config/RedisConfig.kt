@@ -6,6 +6,7 @@ import io.lettuce.core.RedisClient
 import io.lettuce.core.codec.ByteArrayCodec
 import io.lettuce.core.codec.RedisCodec
 import io.lettuce.core.codec.StringCodec
+import org.example.service.RIDE_OFFER_CHANNEL_PREFIX
 import org.example.service.RideOfferListener
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Configuration
@@ -19,9 +20,10 @@ class RedisConfig(private val rideOfferListener: RideOfferListener) {
 
     @Bean
     fun redisListenerContainer(connectionFactory: RedisConnectionFactory): RedisMessageListenerContainer =
+        // Each Kotlin server is subscribed to the RIDE_OFFER_CHANNEL_PREFIX channel. In dispatchservice, redis is publishing to this channel
         RedisMessageListenerContainer().apply {
             setConnectionFactory(connectionFactory)
-            addMessageListener(rideOfferListener, PatternTopic("ride_offers:*"))
+            addMessageListener(rideOfferListener, PatternTopic("$RIDE_OFFER_CHANNEL_PREFIX*"))
         }
 
     @Bean
