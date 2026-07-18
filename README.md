@@ -53,13 +53,12 @@ flowchart TB
     subgraph useast1["us-east-1 (Boston + NYC)"]
         alb1["Application Load Balancer"]
         ecs1["ECS Fargate tasks<br/>auto-scaled, multi-AZ"]
-        proxy1["RDS Proxy"]
         aurora1[("Aurora PostgreSQL<br/>writer + read replicas")]
         redis1[("ElastiCache Redis<br/>drivers:locations:boston<br/>drivers:locations:nyc")]
         msk1[["Amazon MSK"]]
 
         alb1 --> ecs1
-        ecs1 --> proxy1 --> aurora1
+        ecs1 --> aurora1
         ecs1 --> redis1
         ecs1 --> msk1
     end
@@ -67,13 +66,12 @@ flowchart TB
     subgraph uswest2["us-west-2 (LA)"]
         alb2["Application Load Balancer"]
         ecs2["ECS Fargate tasks<br/>auto-scaled, multi-AZ"]
-        proxy2["RDS Proxy"]
         aurora2[("Aurora PostgreSQL<br/>writer + read replicas")]
         redis2[("ElastiCache Redis<br/>drivers:locations:la")]
         msk2[["Amazon MSK"]]
 
         alb2 --> ecs2
-        ecs2 --> proxy2 --> aurora2
+        ecs2 --> aurora2
         ecs2 --> redis2
         ecs2 --> msk2
     end
@@ -85,7 +83,7 @@ flowchart TB
 **Notes on the choices above:**
 - **Compute** — ECS on Fargate rather than EKS, since this is a single Spring Boot service rather than a fleet of microservices; auto-scales on connection count/CPU rather than being statically provisioned, since driver SSE connection volume swings heavily between rush hour and overnight.
 - **ALB idle timeout** must be raised above its 60s default (or offset with server-side heartbeats) — otherwise it will silently drop the long-lived SSE connections drivers and riders depend on.
-- **Aurora over vanilla RDS** for read-replica scaling (up to 15) and lower replication lag; fronted by **RDS Proxy** so many ECS tasks don't exhaust Aurora's direct connection limit.
+- **Aurora over vanilla RDS** for read-replica scaling (up to 15) and lower replication lag. No RDS Proxy in front of it: at ~3-4 ECS tasks per region and Spring Boot's default HikariCP pool size (10), worst case is ~30-40 real connections — nowhere near enough to threaten Aurora's connection limit, so the added hop/latency/cost isn't justified yet. Worth revisiting if task count grows substantially or connection metrics show pressure.
 - **Redis is logically sharded per city** (`drivers:locations:{city}`) rather than physically split per city up front — Redis Geo commands operate per key, so this already isolates each city's data even on a shared cluster. A city only gets split onto its own cluster if its load actually demands it.
 - **Kafka via Amazon MSK** rather than self-hosted, one cluster per region alongside the rest of that region's stack.
 
