@@ -33,6 +33,62 @@ A ride-hailing backend built with Kotlin and Spring Boot. Covers the core Uber f
 
 **Rate limiting** — Redis-backed token buckets (Bucket4j) cap ride requests to 5/minute per rider and login/register attempts to 10/15 minutes per IP, so a retry loop or brute-force attempt can't hammer the API or the DB.
 
+## Deployment architecture (AWS)
+
+Ride matching is inherently local — a driver in LA never matches a rider in Boston — so the deployment is split by region rather than run as one global stack. Each region is fully self-contained (its own compute, Postgres, Redis, and Kafka), which gives both lower latency for the region it serves and fault isolation: an outage in one region doesn't affect the other.
+
+**Capacity assumptions (back-of-envelope, for sizing purposes):**
+- Scope: three cities — **Boston, New York, and LA** — grouped by coast: NYC + Boston in `us-east-1`, LA in `us-west-2`, since LA is ~2,500 miles / 60-80ms round-trip from the East Coast and ride matching has no cross-city dependency.
+- Peak concurrent online drivers (rough, by relative city size): NYC ~100k, LA ~50k, Boston ~20k → **~170k concurrent driver SSE connections** at peak across all three.
+- Rider SSE connections are far fewer at any instant despite similar request volume, since a rider's connection is only open for the ~20 minutes of an active trip (matching/pickup/in-progress) versus a driver's connection staying open for a full shift — by Little's Law (concurrent = arrival rate × time-in-system), a smaller per-session window means a much smaller concurrent count for the same throughput.
+- Each ECS Fargate task is assumed to hold **~10-15k idle SSE connections** comfortably (Spring MVC's `SseEmitter` releases the request thread immediately via Servlet async support; the underlying Tomcat NIO connector holds idle sockets cheaply — the real ceiling is JVM heap per connection object, not thread count). That puts `us-east-1` (NYC + Boston, ~120k connections) at roughly **10-12 tasks** for connection-holding alone, before adding headroom for active-request processing, multi-AZ redundancy, and burst capacity — actual sizing would come from load testing, not this estimate alone.
+
+```mermaid
+flowchart TB
+    riders["Riders / Drivers"]
+    r53["Route 53 — latency-based routing"]
+
+    riders --> r53
+
+    subgraph useast1["us-east-1 (Boston + NYC)"]
+        alb1["Application Load Balancer"]
+        ecs1["ECS Fargate tasks<br/>auto-scaled, multi-AZ"]
+        proxy1["RDS Proxy"]
+        aurora1[("Aurora PostgreSQL<br/>writer + read replicas")]
+        redis1[("ElastiCache Redis<br/>drivers:locations:boston<br/>drivers:locations:nyc")]
+        msk1[["Amazon MSK"]]
+
+        alb1 --> ecs1
+        ecs1 --> proxy1 --> aurora1
+        ecs1 --> redis1
+        ecs1 --> msk1
+    end
+
+    subgraph uswest2["us-west-2 (LA)"]
+        alb2["Application Load Balancer"]
+        ecs2["ECS Fargate tasks<br/>auto-scaled, multi-AZ"]
+        proxy2["RDS Proxy"]
+        aurora2[("Aurora PostgreSQL<br/>writer + read replicas")]
+        redis2[("ElastiCache Redis<br/>drivers:locations:la")]
+        msk2[["Amazon MSK"]]
+
+        alb2 --> ecs2
+        ecs2 --> proxy2 --> aurora2
+        ecs2 --> redis2
+        ecs2 --> msk2
+    end
+
+    r53 --> alb1
+    r53 --> alb2
+```
+
+**Notes on the choices above:**
+- **Compute** — ECS on Fargate rather than EKS, since this is a single Spring Boot service rather than a fleet of microservices; auto-scales on connection count/CPU rather than being statically provisioned, since driver SSE connection volume swings heavily between rush hour and overnight.
+- **ALB idle timeout** must be raised above its 60s default (or offset with server-side heartbeats) — otherwise it will silently drop the long-lived SSE connections drivers and riders depend on.
+- **Aurora over vanilla RDS** for read-replica scaling (up to 15) and lower replication lag; fronted by **RDS Proxy** so many ECS tasks don't exhaust Aurora's direct connection limit.
+- **Redis is logically sharded per city** (`drivers:locations:{city}`) rather than physically split per city up front — Redis Geo commands operate per key, so this already isolates each city's data even on a shared cluster. A city only gets split onto its own cluster if its load actually demands it.
+- **Kafka via Amazon MSK** rather than self-hosted, one cluster per region alongside the rest of that region's stack.
+
 ## Running locally
 
 **Prerequisites:** Java 21, PostgreSQL, Redis, Kafka running locally.
