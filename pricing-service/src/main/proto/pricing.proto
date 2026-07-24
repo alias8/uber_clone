@@ -1,0 +1,24 @@
+syntax = "proto3";
+
+package pricing;
+
+option java_package = "org.example.pricing.grpc";
+option java_multiple_files = true;
+
+service PricingService {
+  rpc GetFareQuote (FareQuoteRequest) returns (FareQuoteResponse);
+}
+
+message FareQuoteRequest {
+  double pickup_lat = 1;
+  double pickup_lng = 2;
+  double dropoff_lat = 3;
+  double dropoff_lng = 4;
+}
+
+// fare and surge_multiplier are decimal strings (e.g. "12.50") — protobuf has no
+// native decimal type, and a double would reintroduce the rounding issues BigDecimal exists to avoid.
+message FareQuoteResponse {
+  string fare = 1;
+  string surge_multiplier = 2;
+}

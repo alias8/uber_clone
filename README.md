@@ -1,6 +1,18 @@
 # Uber Clone — Kotlin Backend
 
-A ride-hailing backend built with Kotlin and Spring Boot. Covers the core Uber flow: riders request trips, drivers come online and accept them, fares are calculated from GPS distance with surge pricing, and both sides can rate each other after completion.
+A ride-hailing backend built with Kotlin and Spring Boot, split into two services. This app (`uber_clone`) handles the core Uber flow — riders request trips, drivers come online and accept them, dispatch and matching happen async over Kafka/Redis, and both sides can rate each other after completion. Fare/surge quoting is split out into [`pricing-service`](pricing-service/), called synchronously over gRPC — see [Services](#services) below for why.
+
+## Services
+
+This is two independently-run services, on purpose — everything downstream of a ride request (dispatch, matching, notifications) is async over Kafka/SSE and can tolerate eventual consistency, but a rider needs a fare *before* they'll confirm a ride. That one synchronous, must-answer-now step is what [`pricing-service`](pricing-service/) exists to isolate, called over gRPC:
+
+```
+Client → POST /rides → RideService --[gRPC: GetFareQuote]--> pricing-service
+                            ↓ (fare returned, ride persisted)
+                        Kafka "ride-requested" → async dispatch (unchanged)
+```
+
+`pricing-service` reads the same local Postgres and Redis as this app rather than replicating driver/ride state via events — see [`pricing-service/README.md`](pricing-service/README.md) for why that's a reasonable simplification for a local practice project but not something you'd do between real production services (it couples their schemas). Run it alongside this app on port `6565`; `RideService.calculateFare` will fail if it isn't running.
 
 ## Stack
 
@@ -19,9 +31,9 @@ A ride-hailing backend built with Kotlin and Spring Boot. Covers the core Uber f
 
 **Dispatch** — when a rider requests a trip, the ride is saved and a Kafka event is published immediately so `POST /rides` returns fast. A Kafka consumer picks up the event asynchronously, finds all online drivers within 5 km using a Redis geo-index, and publishes a ride offer to each driver's Redis pub/sub channel (`ride_offers:{driverId}`), including the driver's ETA to the rider. Drivers receive offers in real time over a persistent SSE connection (`GET /driver/offers`). The first driver to call `POST /rides/{id}/accept` gets the ride; concurrent accepts are handled safely with JPA optimistic locking. A scheduled job re-publishes any ride still stuck in `REQUESTED` after 2 minutes, so a dropped Kafka message or dispatch to zero available drivers doesn't strand a rider.
 
-**Rides** — rides move through a status machine: `REQUESTED → MATCHED → IN_PROGRESS → COMPLETED` (or `CANCELLED`). Fare is calculated once at request time using the Haversine distance formula plus the current surge multiplier, and locked in — the rider pays that price regardless of surge changes during the trip. Riders get a live ETA to pickup once a driver accepts, then a live ETA to the destination once the trip starts, both recalculated as the driver's GPS location updates.
+**Rides** — rides move through a status machine: `REQUESTED → MATCHED → IN_PROGRESS → COMPLETED` (or `CANCELLED`). Fare is quoted once at request time via a synchronous gRPC call to `pricing-service` (Haversine distance plus the current surge multiplier) and locked in — the rider pays that price regardless of surge changes during the trip. Riders get a live ETA to pickup once a driver accepts, then a live ETA to the destination once the trip starts, both recalculated as the driver's GPS location updates.
 
-**Surge pricing** — Redis-backed surge multiplier keyed by geographic area. Multiplier scales with local demand and is cached with a TTL.
+**Surge pricing** — owned by `pricing-service`. Redis-backed surge multiplier keyed by geographic area, scaling with local demand (nearby available drivers vs. nearby pending ride requests) and cached with a TTL.
 
 **Driver management** — drivers register with vehicle details, toggle online/offline status, update their GPS location, and can query for nearby online drivers within a configurable radius. Online drivers are tracked in a Redis geo-index for proximity queries and a Redis Set (`drivers:available`) for O(1) availability checks — no Postgres table scans on dispatch.
 
@@ -52,28 +64,36 @@ flowchart TB
 
     subgraph useast1["us-east-1 (Boston + NYC)"]
         alb1["Application Load Balancer"]
-        ecs1["ECS Fargate tasks<br/>auto-scaled, multi-AZ"]
+        ecs1["ECS Fargate tasks — uber_clone<br/>auto-scaled, multi-AZ"]
+        pricing1["ECS Fargate tasks — pricing-service<br/>internal only, no ALB"]
         aurora1[("Aurora PostgreSQL<br/>writer + read replicas")]
         redis1[("ElastiCache Redis<br/>drivers:locations:boston<br/>drivers:locations:nyc")]
         msk1[["Amazon MSK"]]
 
         alb1 --> ecs1
+        ecs1 -- "gRPC: GetFareQuote<br/>(Cloud Map service discovery)" --> pricing1
         ecs1 --> aurora1
         ecs1 --> redis1
         ecs1 --> msk1
+        pricing1 --> aurora1
+        pricing1 --> redis1
     end
 
     subgraph uswest2["us-west-2 (LA)"]
         alb2["Application Load Balancer"]
-        ecs2["ECS Fargate tasks<br/>auto-scaled, multi-AZ"]
+        ecs2["ECS Fargate tasks — uber_clone<br/>auto-scaled, multi-AZ"]
+        pricing2["ECS Fargate tasks — pricing-service<br/>internal only, no ALB"]
         aurora2[("Aurora PostgreSQL<br/>writer + read replicas")]
         redis2[("ElastiCache Redis<br/>drivers:locations:la")]
         msk2[["Amazon MSK"]]
 
         alb2 --> ecs2
+        ecs2 -- "gRPC: GetFareQuote<br/>(Cloud Map service discovery)" --> pricing2
         ecs2 --> aurora2
         ecs2 --> redis2
         ecs2 --> msk2
+        pricing2 --> aurora2
+        pricing2 --> redis2
     end
 
     r53 --> alb1
@@ -81,7 +101,9 @@ flowchart TB
 ```
 
 **Notes on the choices above:**
-- **Compute** — ECS on Fargate rather than EKS, since this is a single Spring Boot service rather than a fleet of microservices; auto-scales on connection count/CPU rather than being statically provisioned, since driver SSE connection volume swings heavily between rush hour and overnight.
+- **Compute** — ECS on Fargate rather than EKS, since this is two small Spring Boot services rather than a large fleet of microservices; `uber_clone` auto-scales on connection count/CPU (driver SSE connection volume swings heavily between rush hour and overnight), `pricing-service` on CPU/request rate.
+- **`pricing-service` has no ALB or public route** — it's only ever called by `uber_clone` within the same VPC, resolved via AWS Cloud Map service discovery (an internal DNS name per region) rather than through a load balancer. It stays per-region alongside the `uber_clone` tasks that call it, for the same locality reason the whole deployment is split by region.
+- **`pricing-service` reads the same Aurora/Redis as `uber_clone`** rather than maintaining its own replicated state — this carries the same schema-coupling tradeoff into the AWS design that's called out in [`pricing-service/README.md`](pricing-service/README.md); the "correct" production version would have it subscribe to ride/driver events and own a local read model instead.
 - **ALB idle timeout** must be raised above its 60s default (or offset with server-side heartbeats) — otherwise it will silently drop the long-lived SSE connections drivers and riders depend on.
 - **Aurora over vanilla RDS** for read-replica scaling (up to 15) and lower replication lag. No RDS Proxy in front of it: at ~3-4 ECS tasks per region and Spring Boot's default HikariCP pool size (10), worst case is ~30-40 real connections — nowhere near enough to threaten Aurora's connection limit, so the added hop/latency/cost isn't justified yet. Worth revisiting if task count grows substantially or connection metrics show pressure.
 - **Redis is logically sharded per city** (`drivers:locations:{city}`) rather than physically split per city up front — Redis Geo commands operate per key, so this already isolates each city's data even on a shared cluster. A city only gets split onto its own cluster if its load actually demands it.
@@ -91,11 +113,19 @@ flowchart TB
 
 **Prerequisites:** Java 21, PostgreSQL, Redis, Kafka running locally.
 
+Start `pricing-service` first (it needs no extra infra beyond the Postgres/Redis you already have running):
+
+```bash
+cd pricing-service && ./gradlew bootRun
+```
+
+Then, from the repo root, this app:
+
 ```bash
 ./gradlew bootRun
 ```
 
-The app starts on port `8080`. Default datasource points to `localhost:5432/uber_clone` — change the database name in `application.properties` or override via env vars.
+The app starts on port `8080` and calls `pricing-service` on `6565` for fare quotes — ride requests will fail with an `UNAVAILABLE` gRPC error if it isn't running. Default datasource points to `localhost:5432/uber_clone` — change the database name in `application.properties` or override via env vars.
 
 ## Configuration
 
@@ -106,6 +136,8 @@ The app starts on port `8080`. Default datasource points to `localhost:5432/uber
 | `DATABASE_PASSWORD` | `password` | DB password |
 | `JWT_SECRET` | `change-me-...` | HMAC signing key — **change in prod** |
 | `COOKIE_SECURE` | `false` | Set `true` in prod (requires HTTPS) |
+| `PRICING_SERVICE_HOST` | `localhost` | gRPC host for `pricing-service` |
+| `PRICING_SERVICE_PORT` | `6565` | gRPC port for `pricing-service` |
 
 Kafka defaults to `localhost:9092` and Redis to `localhost:6379`.
 

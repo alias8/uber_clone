@@ -1,18 +1,17 @@
 package org.example.service
 
+import org.example.client.PricingClient
 import org.example.model.Ride
 import org.example.model.RideStatus
 import org.example.dto.RideRequest
 import org.example.repository.DriverRepository
 import org.example.repository.RideRepository
-import org.example.utils.haversineKm
 import org.springframework.http.HttpStatus
 import org.springframework.orm.ObjectOptimisticLockingFailureException
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
 import org.springframework.web.server.ResponseStatusException
 import java.math.BigDecimal
-import java.math.RoundingMode
 import java.time.Instant
 
 @Service
@@ -20,7 +19,7 @@ class RideService(
     private val rideRepository: RideRepository,
     private val driverRepository: DriverRepository,
     private val driverService: DriverService,
-    private val surgeService: SurgeService,
+    private val pricingClient: PricingClient,
     private val kafkaEventProducer: KafkaEventProducer
 ) {
     fun requestRide(riderId: String, request: RideRequest): Ride {
@@ -114,13 +113,9 @@ class RideService(
         return saved
     }
 
-    internal fun calculateFare(ride: Ride): BigDecimal {
-        val distanceKm = haversineKm(ride.pickupLat, ride.pickupLng, ride.dropoffLat, ride.dropoffLng)
-        val base = BigDecimal("2.00")
-        val perKm = BigDecimal("1.50")
-        val baseFare = base + perKm * BigDecimal(distanceKm)
-        val surge = surgeService.getMultiplier(ride.pickupLat, ride.pickupLng)
-        return (baseFare * surge).setScale(2, RoundingMode.HALF_UP)
-    }
+    // Calls out to pricing-service (a separate process, over gRPC) rather than computing the fare
+    // in-process — see pricing-service/README.md for why that call is synchronous on this path.
+    internal fun calculateFare(ride: Ride): BigDecimal =
+        pricingClient.getFareQuote(ride.pickupLat, ride.pickupLng, ride.dropoffLat, ride.dropoffLng).fare
 }
 
