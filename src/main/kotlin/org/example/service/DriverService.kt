@@ -102,14 +102,27 @@ class DriverService(
             .sortAscending()
             .limit(20)
 
-        val results = geo.radius(
+        val results = geo.radius( 
             DRIVER_GEO_KEY,
             Circle(Point(lng, lat), Distance(radiusKm, Metrics.KILOMETERS)),
             args
         ) ?: return emptyList()
 
-        return results.content
-            .filter { redisTemplate.opsForSet().isMember(DRIVER_AVAILABLE_SET, it.content.name) == true }
+        val content = results.content
+        if (content.isEmpty()) return emptyList()
+        
+        val driverIds = content.map { it.content.name }.toTypedArray()
+        // Batched via SMISMEMBER (one round trip) instead of one isMember() call per driver.
+        // availability looks like 
+//        {
+//            "driver-1" to true,
+//            "driver-2" to false,
+//            "driver-3" to true
+//        }
+        val availability = redisTemplate.opsForSet().isMember(DRIVER_AVAILABLE_SET, *driverIds)
+
+        return content
+            .filter { availability[it.content.name] == true }
             .map { NearbyDriverResponse(driverId = it.content.name, distanceKm = it.distance.value) }
     }
 }
