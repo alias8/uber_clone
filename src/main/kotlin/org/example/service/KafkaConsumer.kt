@@ -1,6 +1,5 @@
 package org.example.service
 
-import org.example.config.DbRouting
 import org.example.model.Ride
 import org.example.model.RideStatus
 import org.example.repository.RideRepository
@@ -21,13 +20,12 @@ class KafkaConsumer(
 ) {
     private val log = LoggerFactory.getLogger(KafkaConsumer::class.java)
 
-    // Always the primary. The event is published right after the ride is saved, and the
-    // consumer can get it within milliseconds: often before the replica has the row. On the
-    // replica, findById returns empty, the "?: return" below drops the event, and the ride is
-    // never dispatched. No error, no retry; StaleRideRetryJob only rescues it 2 minutes later.
-    // Rule: a consumer reading the row its event is about reads the primary.
-    private fun loadRide(rideId: String): Ride? =
-        DbRouting.primary { rideRepository.findById(rideId).orElse(null) }
+    // Must read the primary, and does by default: it doesn't opt in through ReplicaReads.
+    // The event can arrive within milliseconds of the save, often before a replica has the row;
+    // there findById would return empty, the "?: return" below would drop the event, and the ride
+    // wouldn't be dispatched until StaleRideRetryJob 2 minutes later, with no error anywhere.
+    // Rule: a consumer reading the row its event is about never uses the replica.
+    private fun loadRide(rideId: String): Ride? = rideRepository.findById(rideId).orElse(null)
 
     @KafkaListener(topics = ["ride-requested"], groupId = "feed-fanout-group")
     fun onRideRequested(rideId: String) {

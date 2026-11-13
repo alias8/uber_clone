@@ -34,9 +34,10 @@ class DriverService(
 ) {
     private val geo get() = redisTemplate.opsForGeo()
 
-    // @Transactional added on the read-then-write methods below for replica routing: otherwise
-    // findById/existsById (read-only in Spring Data) would run on the replica and the write
-    // would be based on stale data. See RideService.getRide.
+    // @Transactional on the read-then-write methods below: the check and the write commit or roll
+    // back together, and joined callers (acceptRide) share one transaction. Added on the
+    // read-replicas branch, where they first mattered for routing; under opt-in routing they
+    // are about atomicity.
     @Transactional(readOnly = false)
     fun registerDriver(userId: String, request: DriverRegisterRequest): Driver {
         if (driverRepository.existsById(userId)) {

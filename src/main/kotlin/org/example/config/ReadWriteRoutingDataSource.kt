@@ -6,17 +6,28 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 enum class DbTarget { PRIMARY, REPLICA }
 
 /**
- * Picks the primary or the replica each time a connection is needed.
+ * Picks the primary or the replica each time a real connection is needed.
  *
- * Rule: replica only for a read-only transaction, and only if nothing has forced the primary
- * for this request. Everything else, including any query run outside a transaction, goes to
- * the primary. Defaulting to the primary means a mistake costs some performance, not stale data.
+ * OPT-IN: the replica is used only when code has explicitly asked for it through
+ * [org.example.service.ReplicaReads] (which also opens a read-only transaction). Everything else
+ * goes to the primary, including Spring Data's findById, even though Spring Data marks it
+ * @Transactional(readOnly = true). Routing is never a side effect of a flag the framework sets.
+ *
+ * A mistake therefore costs performance (a read that could have used the replica didn't), never
+ * correctness (a read that needed fresh data got stale data).
+ *
+ * Order of checks:
+ *  1. This user wrote in the last few seconds (RecentWriteInterceptor) -> PRIMARY, even for an
+ *     opted-in read, so they see their own write.
+ *  2. Code opted in AND we're in a read-only transaction -> REPLICA.
+ *  3. Anything else -> PRIMARY.
  */
 class ReadWriteRoutingDataSource : AbstractRoutingDataSource() {
     override fun determineCurrentLookupKey(): DbTarget {
         val target = when {
             DbRouting.isPrimaryForced() -> DbTarget.PRIMARY
-            TransactionSynchronizationManager.isCurrentTransactionReadOnly() -> DbTarget.REPLICA
+            DbRouting.isReplicaRequested() &&
+                TransactionSynchronizationManager.isCurrentTransactionReadOnly() -> DbTarget.REPLICA
             else -> DbTarget.PRIMARY
         }
         logger.debug("Routing connection to $target")
@@ -25,31 +36,33 @@ class ReadWriteRoutingDataSource : AbstractRoutingDataSource() {
 }
 
 /**
- * Per-thread "use the primary" switch. Works with virtual threads: each request runs on its own
- * virtual thread, so a ThreadLocal is still per request.
- *
- * Used two ways:
- *  - RecentWriteInterceptor turns it on for a whole request when this user wrote in the last few
- *    seconds (read-your-own-writes).
- *  - DbRouting.primary { ... } wraps code that must never see stale data, e.g. a Kafka consumer
- *    reading the row an event was just published about.
+ * Per-thread routing flags. Works with virtual threads: each request runs on its own virtual
+ * thread, so a ThreadLocal is still per request.
  */
 object DbRouting {
     private val forcePrimary = ThreadLocal.withInitial { false }
+    private val replicaRequested = ThreadLocal.withInitial { false }
 
     fun isPrimaryForced(): Boolean = forcePrimary.get()
 
+    fun isReplicaRequested(): Boolean = replicaRequested.get()
+
+    /** Read-your-own-writes: set for a whole request by RecentWriteInterceptor. */
     fun forcePrimary() = forcePrimary.set(true)
 
-    fun clear() = forcePrimary.remove()
+    fun clear() {
+        forcePrimary.remove()
+        replicaRequested.remove()
+    }
 
-    fun <T> primary(block: () -> T): T {
-        val previous = forcePrimary.get()
-        forcePrimary.set(true)
+    /** Only for ReplicaReads. Restores the previous value so nesting is safe. */
+    internal fun <T> withReplicaRequested(block: () -> T): T {
+        val previous = replicaRequested.get()
+        replicaRequested.set(true)
         try {
             return block()
         } finally {
-            forcePrimary.set(previous)
+            replicaRequested.set(previous)
         }
     }
 }

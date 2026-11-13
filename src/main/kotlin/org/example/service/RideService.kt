@@ -6,8 +6,6 @@ import org.example.model.RideStatus
 import org.example.dto.RideRequest
 import org.example.repository.DriverRepository
 import org.example.repository.RideRepository
-import org.springframework.data.domain.Page
-import org.springframework.data.domain.Pageable
 import org.springframework.http.HttpStatus
 import org.springframework.orm.ObjectOptimisticLockingFailureException
 import org.springframework.stereotype.Service
@@ -25,9 +23,8 @@ class RideService(
     private val kafkaEventProducer: KafkaEventProducer
 ) {
     // Not @Transactional on purpose: it makes a gRPC call to pricing-service, and a transaction
-    // would hold a DB connection across it. Its reads are safe anyway: existsBy... is a derived
-    // query, which Spring Data does NOT mark read-only, so it runs outside a read-only
-    // transaction and goes to the primary.
+    // would hold a DB connection across it. Its reads go to the primary like every read that
+    // doesn't opt in to the replica.
     fun requestRide(riderId: String, request: RideRequest): Ride {
         val activeStatuses = listOf(RideStatus.REQUESTED, RideStatus.MATCHED, RideStatus.IN_PROGRESS)
         if (rideRepository.existsByRiderIdAndStatusIn(riderId, activeStatuses)) {
@@ -46,34 +43,20 @@ class RideService(
         return saved
     }
 
-    // Used inside the write methods below (read the ride, check its status, update it). Those are
-    // @Transactional, so this joins their read-write transaction and reads the primary.
+    // Used inside the write methods below (read the ride, check its status, update it), so it
+    // must be fresh: primary. Reads only go to the replica when code opts in through ReplicaReads
+    // (see RideQueries); this doesn't. Spring Data marks findById readOnly = true, but under
+    // opt-in routing that flag no longer picks the database.
     //
-    // Gotcha: findById comes from SimpleJpaRepository, which Spring Data marks
-    // @Transactional(readOnly = true). Called OUTSIDE a transaction, it starts its own read-only
-    // one, and the router sends it to the replica. Before routing existed that flag did nothing
-    // visible, so startRide/completeRide/cancelRide had no @Transactional and nobody noticed.
-    // With routing on, they would check a stale status from the replica and then write.
+    // (Under the first version of this branch, where readOnly = true meant "replica", this
+    // findById outside a transaction went to the replica, and startRide/completeRide/cancelRide
+    // would have checked a stale status before writing. That surprise is why routing is now opt-in.)
     fun getRide(rideId: String): Ride =
         rideRepository.findById(rideId).orElseThrow {
             ResponseStatusException(HttpStatus.NOT_FOUND, "Ride not found")
         }
 
-    // ----- Reads that can be a little stale: replica -----
-
-    // GET /rides/{id}: the rider's app polls this. A driver accepting shows up a few ms late,
-    // which nobody notices. The rider's OWN fresh write (just requested the ride) is covered by
-    // RecentWriteInterceptor, which forces the primary for 5 s after they write.
-    @Transactional(readOnly = true)
-    fun getRideForDisplay(rideId: String): Ride = getRide(rideId)
-
-    // Ride history: a second stale is fine, and it's the kind of varied, paged read that a
-    // replica is for (too varied to cache well).
-    @Transactional(readOnly = true)
-    fun getRiderHistory(riderId: String, pageable: Pageable): Page<Ride> =
-        rideRepository.findByRiderIdOrderByRequestedAtDesc(riderId, pageable)
-
-    // ----- Writes: primary -----
+    // Reads that may be stale (GET /rides/{id}, history) live in RideQueries.
 
     @Transactional(readOnly = false) // @Transactional means "run this method inside one DB transaction."  readOnly is an option on that annotation, and its default is false
     fun acceptRide(rideId: String, driverId: String): Ride {
@@ -102,7 +85,7 @@ class RideService(
         }
     }
 
-    @Transactional(readOnly = false) // added for routing: keeps getRide's check-then-write on the primary
+    @Transactional(readOnly = false) // check-then-write as one unit: the status check and the update commit or roll back together
     fun startRide(rideId: String, driverId: String): Ride {
         val ride = getRide(rideId)
         if (ride.status != RideStatus.MATCHED) {
@@ -114,7 +97,7 @@ class RideService(
         return rideRepository.save(ride.copy(status = RideStatus.IN_PROGRESS))
     }
 
-    @Transactional(readOnly = false) // added for routing (see startRide)
+    @Transactional(readOnly = false) // see startRide
     fun completeRide(rideId: String, driverId: String): Ride {
         val ride = getRide(rideId)
         if (ride.status != RideStatus.IN_PROGRESS) {
@@ -133,7 +116,7 @@ class RideService(
         return saved
     }
 
-    @Transactional(readOnly = false) // added for routing (see startRide)
+    @Transactional(readOnly = false) // see startRide
     fun cancelRide(rideId: String, userId: String): Ride {
         val ride = getRide(rideId)
         if (ride.status == RideStatus.IN_PROGRESS || ride.status == RideStatus.COMPLETED) {
