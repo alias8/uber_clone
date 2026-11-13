@@ -28,7 +28,7 @@ class RatingService(
     private val userRepository: UserRepository,
     private val driverRepository: DriverRepository
 ) {
-    @Transactional // added for replica routing: the status and "already rated" checks must read the primary
+    @Transactional(readOnly = false) // added for replica routing: the status and "already rated" checks must read the primary
     fun rate(rideId: String, fromUserId: String, score: Int, comment: String?) {
         if (score !in 1..5) {
             throw ResponseStatusException(HttpStatus.BAD_REQUEST, "Score must be between 1 and 5")

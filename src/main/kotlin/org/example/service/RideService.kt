@@ -75,7 +75,7 @@ class RideService(
 
     // ----- Writes: primary -----
 
-    @Transactional // @Transactional means "run this method inside one DB transaction."  readOnly is an option on that annotation, and its default is false
+    @Transactional(readOnly = false) // @Transactional means "run this method inside one DB transaction."  readOnly is an option on that annotation, and its default is false
     fun acceptRide(rideId: String, driverId: String): Ride {
         val ride = getRide(rideId)
         if (ride.status != RideStatus.REQUESTED) {
@@ -102,7 +102,7 @@ class RideService(
         }
     }
 
-    @Transactional // added for routing: keeps getRide's check-then-write on the primary
+    @Transactional(readOnly = false) // added for routing: keeps getRide's check-then-write on the primary
     fun startRide(rideId: String, driverId: String): Ride {
         val ride = getRide(rideId)
         if (ride.status != RideStatus.MATCHED) {
@@ -114,7 +114,7 @@ class RideService(
         return rideRepository.save(ride.copy(status = RideStatus.IN_PROGRESS))
     }
 
-    @Transactional // added for routing (see startRide)
+    @Transactional(readOnly = false) // added for routing (see startRide)
     fun completeRide(rideId: String, driverId: String): Ride {
         val ride = getRide(rideId)
         if (ride.status != RideStatus.IN_PROGRESS) {
@@ -133,7 +133,7 @@ class RideService(
         return saved
     }
 
-    @Transactional // added for routing (see startRide)
+    @Transactional(readOnly = false) // added for routing (see startRide)
     fun cancelRide(rideId: String, userId: String): Ride {
         val ride = getRide(rideId)
         if (ride.status == RideStatus.IN_PROGRESS || ride.status == RideStatus.COMPLETED) {

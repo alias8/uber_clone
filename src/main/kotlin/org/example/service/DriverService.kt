@@ -37,7 +37,7 @@ class DriverService(
     // @Transactional added on the read-then-write methods below for replica routing: otherwise
     // findById/existsById (read-only in Spring Data) would run on the replica and the write
     // would be based on stale data. See RideService.getRide.
-    @Transactional
+    @Transactional(readOnly = false)
     fun registerDriver(userId: String, request: DriverRegisterRequest): Driver {
         if (driverRepository.existsById(userId)) {
             throw ResponseStatusException(HttpStatus.CONFLICT, "Driver profile already exists")
@@ -57,14 +57,14 @@ class DriverService(
             ResponseStatusException(HttpStatus.NOT_FOUND, "No driver profile found")
         }
 
-    @Transactional
+    @Transactional(readOnly = false)
     fun goOnline(userId: String, lat: Double, lng: Double): Driver {
         val driver = getProfile(userId)
         geo.add(DRIVER_GEO_KEY, Point(lng, lat), userId)
         return markAvailable(driver)
     }
 
-    @Transactional
+    @Transactional(readOnly = false)
     fun goOffline(userId: String): Driver {
         val driver = getProfile(userId)
         redisTemplate.opsForZSet().remove(DRIVER_GEO_KEY, userId)
@@ -73,12 +73,12 @@ class DriverService(
         return saved
     }
 
-    @Transactional
+    @Transactional(readOnly = false)
     fun markAvailable(userId: String) {
         driverRepository.findById(userId).ifPresent { markAvailable(it) }
     }
 
-    @Transactional
+    @Transactional(readOnly = false)
     fun markUnavailable(userId: String) {
         driverRepository.findById(userId).ifPresent { markUnavailable(it) }
     }
