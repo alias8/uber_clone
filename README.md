@@ -105,9 +105,104 @@ flowchart TB
 - **`pricing-service` has no ALB or public route** — it's only ever called by `uber_clone` within the same VPC, resolved via AWS Cloud Map service discovery (an internal DNS name per region) rather than through a load balancer. It stays per-region alongside the `uber_clone` tasks that call it, for the same locality reason the whole deployment is split by region.
 - **`pricing-service` reads the same Aurora/Redis as `uber_clone`** rather than maintaining its own replicated state — this carries the same schema-coupling tradeoff into the AWS design that's called out in [`pricing-service/README.md`](pricing-service/README.md); the "correct" production version would have it subscribe to ride/driver events and own a local read model instead.
 - **ALB idle timeout** must be raised above its 60s default (or offset with server-side heartbeats) — otherwise it will silently drop the long-lived SSE connections drivers and riders depend on.
-- **Aurora over vanilla RDS** for read-replica scaling (up to 15) and lower replication lag. No RDS Proxy in front of it: at ~3-4 ECS tasks per region and Spring Boot's default HikariCP pool size (10), worst case is ~30-40 real connections — nowhere near enough to threaten Aurora's connection limit, so the added hop/latency/cost isn't justified yet. Worth revisiting if task count grows substantially or connection metrics show pressure.
+- **Aurora over vanilla RDS** for read-replica scaling (up to 15) and lower replication lag. How the app splits reads between writer and replica is in [Read replicas and transactions](#read-replicas-and-transactions). No RDS Proxy in front of it: at ~3-4 ECS tasks per region and a HikariCP pool of 10 per database (one pool for the writer, one for the replica), worst case is ~30-40 real connections to each — nowhere near enough to threaten Aurora's connection limit, so the added hop/latency/cost isn't justified yet. Worth revisiting if task count grows substantially or connection metrics show pressure.
 - **Redis is logically sharded per city** (`drivers:locations:{city}`) rather than physically split per city up front — Redis Geo commands operate per key, so this already isolates each city's data even on a shared cluster. A city only gets split onto its own cluster if its load actually demands it.
 - **Kafka via Amazon MSK** rather than self-hosted, one cluster per region alongside the rest of that region's stack.
+
+## Read replicas and transactions
+
+Added on the `read-replicas` branch (Nov 2026) as a study exercise. **It compiles but has never been run against a real replica:** locally both pools point at the same Postgres, so replication lag is zero and none of the stale-read cases below can actually happen on a laptop.
+
+### The rule: primary by default, replica only when code opts in
+
+A replica copies the primary a few milliseconds later. Reading from it is fine for "show me my ride history", and wrong for "check the ride is still REQUESTED, then accept it". So every read goes to the **primary** unless the code explicitly says it can be stale:
+
+```kotlin
+// RideQueries.kt: the only reads that use the replica
+fun riderHistory(riderId: String, pageable: Pageable) = replicaReads.read {
+    rideRepository.findByRiderIdOrderByRequestedAtDesc(riderId, pageable)
+}
+```
+
+| Read | Goes to | Why |
+|---|---|---|
+| `GET /rides/{id}`, `GET /rides/history`, `GET /driver/rides` (`RideQueries`) | replica | Display only; a few ms stale is invisible |
+| Same, within 5 s of this user's last write | primary | Read-your-own-writes (cookie, below) |
+| Anything inside a write (`acceptRide`, `startRide`, `rate`...) | primary | Checks state before changing it |
+| Kafka consumers | primary | The event can arrive before the replica has the row |
+| Everything else | primary | Default |
+
+A mistake in this design costs performance (a read that could have used the replica didn't), never correctness.
+
+**Why opt-in:** the first version routed every `readOnly = true` transaction to the replica. Spring Data marks its own `findById` as `readOnly = true`, so `startRide`/`completeRide`/`cancelRide` (which had no `@Transactional`) silently started checking ride status on the replica, and the Kafka consumer could find no ride and drop the event. Routing as a side effect of a framework flag is the thing to avoid. Large systems decide in one place instead: Rails/GitHub route by request type (GET → replica, with a 2 s window after a write), Facebook's data layer (TAO) decides for product code. Opt-in per query is the usual choice when retrofitting a replica.
+
+### How a request picks a database
+
+| File | What it does |
+|---|---|
+| [`config/DataSourceConfig.kt`](src/main/kotlin/org/example/config/DataSourceConfig.kt) | Two Hikari pools (`primary`, `replica`) behind one routing DataSource, wrapped in `LazyConnectionDataSourceProxy` |
+| [`config/ReadWriteRoutingDataSource.kt`](src/main/kotlin/org/example/config/ReadWriteRoutingDataSource.kt) | The router, plus `DbRouting` (per-request ThreadLocal flags) |
+| [`service/ReplicaReads.kt`](src/main/kotlin/org/example/service/ReplicaReads.kt) | `replicaReads.read { }`: read-only transaction + "replica requested" flag |
+| [`service/RideQueries.kt`](src/main/kotlin/org/example/service/RideQueries.kt) | The opted-in reads. Adding a method here is the "this can be stale" decision |
+| [`config/RecentWriteInterceptor.kt`](src/main/kotlin/org/example/config/RecentWriteInterceptor.kt) | The 5 s read-your-own-writes cookie |
+
+The router runs once per transaction, on the first SQL statement, and checks in order:
+
+1. This user wrote in the last 5 s → **primary**
+2. Code opted in through `ReplicaReads` **and** the transaction is read-only → **replica**
+3. Anything else → **primary**
+
+`LazyConnectionDataSourceProxy` matters: Spring asks for a connection *before* it marks the transaction read-only, so without the proxy the router would always see "not read-only". The proxy hands back a placeholder and only picks the real connection on the first SQL statement.
+
+### Read-your-own-writes: the 5-second cookie
+
+Without it: the rider `POST /rides`, the app immediately polls `GET /rides/{id}`, the replica hasn't got the row yet, and the rider gets a 404 for the ride they just created.
+
+```
+POST /rides       → interceptor sets  recent_write=1; Max-Age=5   → INSERT on primary
+GET /rides/{id}   (1 s later, cookie sent)    → forced to primary → sees the new ride
+GET /rides/{id}   (6 s later, cookie expired) → replica
+```
+
+The browser deletes the cookie by itself after 5 s, so the server keeps no state. 5 s has to stay well above normal lag (milliseconds); if lag ever exceeds it, this stops protecting anyone, which is why replica lag needs an alarm.
+
+**Known weaknesses:**
+- **Any POST/PUT/PATCH/DELETE sets the cookie**, including `POST /driver/location`, which the driver app sends every few seconds and which only writes Redis. So online drivers never read from the replica. Better: set the cookie only when a DB transaction actually commits (`afterCommit`).
+- **It's per device.** Write on your phone, read on your laptop a second later, and the laptop has no cookie. Accepted tradeoff; fixing it means storing "last write time" per user server-side (e.g. Redis).
+- The cookie is set before the handler runs, so a failed write sets it too. Harmless (a few extra primary reads).
+
+### Transactions: what `@Transactional` does here
+
+- `@Transactional` = run the method as **one DB transaction**: Spring's proxy sends `BEGIN` before it, `COMMIT` if it returns, `ROLLBACK` if it throws a `RuntimeException`. All read-write ones are written `@Transactional(readOnly = false)` on purpose, even though `false` is the default, to make it obvious.
+- **One transaction per use case, started at the service entry point.** Anything called inside (`driverService.markUnavailable` from `acceptRide`, repository methods) **joins** it (`Propagation.REQUIRED`): no new transaction, no commit of its own, same connection. Only the outermost method commits.
+- **A joined method that throws marks the whole transaction rollback-only**, even if the caller catches the exception.
+- **`@Transactional` only works through the proxy**: calling a method on `this` from inside the same class skips it.
+- `acceptRide` call tree, for reference:
+
+```
+rideService.acceptRide()               ← proxy starts transaction (read-write)
+  getRide() → findById                 ← joins             SELECT ride      (first SQL: router picks PRIMARY)
+  driverRepository.findById            ← joins             SELECT driver
+  driverService.markUnavailable(id)    ← proxy, joins
+      save(driver)                     ← queued
+      afterCommit { Redis SREM }       ← registered
+  saveAndFlush(ride)                   ← UPDATE drivers, UPDATE rides ... WHERE version = ?
+  publishRideAccepted                  ← afterCommit { Kafka send } registered
+← return → COMMIT → Redis, then Kafka
+```
+
+### Bugs fixed along the way (they existed with one database too)
+
+- **The accept race returned a 500, not a 409.** `Ride` has `@Version` (optimistic locking: `UPDATE ... WHERE id = ? AND version = ?`, 0 rows means someone else won). But `save()` only queues the UPDATE; it was sent at commit, after `acceptRide` had left its `try/catch`. Now `saveAndFlush` runs it inside the `try`.
+- **Kafka events were sent before commit.** Other connections can't see uncommitted rows, so the `ride-accepted` consumer could read `driverId = null` and cancel the offer for every driver, including the winner, and a driver who lost the race still sent `ride-accepted`. Now [`KafkaEventProducer`](src/main/kotlin/org/example/service/KafkaEventProducer.kt) sends every event after commit, via [`utils/afterCommit`](src/main/kotlin/org/example/utils/TransactionUtils.kt).
+- **Redis wasn't rolled back with the DB.** A rolled-back accept left the driver out of `drivers:available`. Redis is now updated after commit; the DB row is the source of truth.
+- **Remaining gap:** if the process dies between `COMMIT` and the Kafka send, the event is lost (`ride-requested` is rescued by the 2-minute stale-ride job; the others aren't). The full fix is an outbox table.
+
+### Safety nets
+
+- [`config/TransactionConfig.kt`](src/main/kotlin/org/example/config/TransactionConfig.kt) turns on `validateExistingTransaction`: a `readOnly = false` method called inside a read-only transaction throws `IllegalTransactionStateException` immediately. Without it, the write's `save()` would silently never flush (Hibernate's flush mode is MANUAL in read-only transactions), or fail later on the replica. It only catches paths that actually run, and it can't catch a stale read, because nothing is mechanically wrong with one.
+- DEBUG logging in `application.properties` shows each transaction (`Creating new transaction`, `Participating in existing transaction`, commit/rollback) and each routing decision (`Routing connection to PRIMARY/REPLICA`). Turn it off outside local development.
+- Not done: integration tests against a real standby with `recovery_min_apply_delay = '2s'`, which is the only way to make stale-read bugs show up in tests.
 
 ## Running locally
 
@@ -131,7 +226,8 @@ The app starts on port `8080` and calls `pricing-service` on `6565` for fare quo
 
 | Variable | Default | Description |
 |---|---|---|
-| `DATABASE_URL` | `jdbc:postgresql://localhost:5432/uber_clone` | JDBC connection string |
+| `DATABASE_URL` | `jdbc:postgresql://localhost:5432/uber_clone` | JDBC connection string for the primary |
+| `DATABASE_REPLICA_URL` | same as `DATABASE_URL` | JDBC connection string for the read replica (see [Read replicas and transactions](#read-replicas-and-transactions)) |
 | `DATABASE_USER` | `jameskirk` | DB username |
 | `DATABASE_PASSWORD` | `password` | DB password |
 | `JWT_SECRET` | `change-me-...` | HMAC signing key — **change in prod** |

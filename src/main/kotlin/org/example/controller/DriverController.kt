@@ -3,10 +3,10 @@ package org.example.controller
 import jakarta.servlet.http.HttpServletResponse
 import org.example.dto.*
 import org.example.model.Role
-import org.example.repository.RideRepository
 import org.example.repository.UserRepository
 import org.example.security.JwtCookieService
 import org.example.service.DriverService
+import org.example.service.RideQueries
 import org.springframework.data.domain.Page
 import org.springframework.data.domain.PageRequest
 import org.springframework.data.domain.Sort
@@ -21,7 +21,7 @@ import org.springframework.web.server.ResponseStatusException
 @RequestMapping("/driver")
 class DriverController(
     private val driverService: DriverService,
-    private val rideRepository: RideRepository,
+    private val rideQueries: RideQueries,
     private val userRepository: UserRepository,
     private val jwtCookieService: JwtCookieService
 ) {
@@ -86,7 +86,7 @@ class DriverController(
     ): ResponseEntity<Page<RideResponse>> {
         val userId = resolveUserId(username)
         val pageable = PageRequest.of(page, size, Sort.by("requestedAt").descending())
-        return ResponseEntity.ok(rideRepository.findByDriverIdOrderByRequestedAtDesc(userId, pageable).map { it.toResponse() })
+        return ResponseEntity.ok(rideQueries.driverHistory(userId, pageable).map { it.toResponse() })
     }
 
     @PreAuthorize("hasRole('DRIVER')")

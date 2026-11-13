@@ -4,11 +4,11 @@ import org.example.dto.RatingRequest
 import org.example.dto.RideRequest
 import org.example.dto.RideResponse
 import org.example.dto.toResponse
-import org.example.repository.RideRepository
 import org.example.repository.UserRepository
 import org.example.service.RateLimiterService
 import org.example.service.RatingService
 import org.example.service.RideService
+import org.example.service.RideQueries
 import org.springframework.data.domain.Page
 import org.springframework.data.domain.PageRequest
 import org.springframework.data.domain.Sort
@@ -23,9 +23,9 @@ import org.springframework.web.server.ResponseStatusException
 @RequestMapping("/rides")
 class RideController(
     private val rideService: RideService,
+    private val rideQueries: RideQueries,
     private val ratingService: RatingService,
     private val rateLimiterService: RateLimiterService,
-    private val rideRepository: RideRepository,
     private val userRepository: UserRepository
 ) {
     private fun resolveUserId(username: String): String =
@@ -49,7 +49,7 @@ class RideController(
 
     @GetMapping("/{id}")
     fun getRide(@PathVariable id: String): ResponseEntity<RideResponse> =
-        ResponseEntity.ok(rideService.getRide(id).toResponse())
+        ResponseEntity.ok(rideQueries.rideForDisplay(id).toResponse())
 
     @PreAuthorize("hasRole('DRIVER')")
     @PostMapping("/{id}/accept")
@@ -98,7 +98,7 @@ class RideController(
     ): ResponseEntity<Page<RideResponse>> {
         val userId = resolveUserId(username)
         val pageable = PageRequest.of(page, size, Sort.by("requestedAt").descending())
-        return ResponseEntity.ok(rideRepository.findByRiderIdOrderByRequestedAtDesc(userId, pageable).map { it.toResponse() })
+        return ResponseEntity.ok(rideQueries.riderHistory(userId, pageable).map { it.toResponse() })
     }
 
     @PostMapping("/{id}/rate")

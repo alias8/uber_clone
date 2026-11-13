@@ -8,6 +8,7 @@ import org.example.repository.RideRepository
 import org.example.repository.UserRepository
 import org.springframework.http.HttpStatus
 import org.springframework.stereotype.Service
+import org.springframework.transaction.annotation.Transactional
 import org.springframework.web.server.ResponseStatusException
 import java.math.BigDecimal
 import java.math.RoundingMode
@@ -27,6 +28,7 @@ class RatingService(
     private val userRepository: UserRepository,
     private val driverRepository: DriverRepository
 ) {
+    @Transactional(readOnly = false) // the status and "already rated" checks, the rating insert and the average updates commit together
     fun rate(rideId: String, fromUserId: String, score: Int, comment: String?) {
         if (score !in 1..5) {
             throw ResponseStatusException(HttpStatus.BAD_REQUEST, "Score must be between 1 and 5")

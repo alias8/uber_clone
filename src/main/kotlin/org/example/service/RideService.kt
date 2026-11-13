@@ -22,6 +22,9 @@ class RideService(
     private val pricingClient: PricingClient,
     private val kafkaEventProducer: KafkaEventProducer
 ) {
+    // Not @Transactional on purpose: it makes a gRPC call to pricing-service, and a transaction
+    // would hold a DB connection across it. Its reads go to the primary like every read that
+    // doesn't opt in to the replica.
     fun requestRide(riderId: String, request: RideRequest): Ride {
         val activeStatuses = listOf(RideStatus.REQUESTED, RideStatus.MATCHED, RideStatus.IN_PROGRESS)
         if (rideRepository.existsByRiderIdAndStatusIn(riderId, activeStatuses)) {
@@ -40,12 +43,22 @@ class RideService(
         return saved
     }
 
+    // Used inside the write methods below (read the ride, check its status, update it), so it
+    // must be fresh: primary. Reads only go to the replica when code opts in through ReplicaReads
+    // (see RideQueries); this doesn't. Spring Data marks findById readOnly = true, but under
+    // opt-in routing that flag no longer picks the database.
+    //
+    // (Under the first version of this branch, where readOnly = true meant "replica", this
+    // findById outside a transaction went to the replica, and startRide/completeRide/cancelRide
+    // would have checked a stale status before writing. That surprise is why routing is now opt-in.)
     fun getRide(rideId: String): Ride =
         rideRepository.findById(rideId).orElseThrow {
             ResponseStatusException(HttpStatus.NOT_FOUND, "Ride not found")
         }
 
-    @Transactional
+    // Reads that may be stale (GET /rides/{id}, history) live in RideQueries.
+
+    @Transactional(readOnly = false) // @Transactional means "run this method inside one DB transaction."  readOnly is an option on that annotation, and its default is false
     fun acceptRide(rideId: String, driverId: String): Ride {
         val ride = getRide(rideId)
         if (ride.status != RideStatus.REQUESTED) {
@@ -60,14 +73,19 @@ class RideService(
 
         try {
             driverService.markUnavailable(driverId)
-            val saved = rideRepository.save(ride.copy(driverId = driverId, status = RideStatus.MATCHED))
-            kafkaEventProducer.publishRideAccepted(saved.id)
+            // saveAndFlush, not save: save() only queues the UPDATE in Hibernate's memory and it
+            // would be sent at commit, after this method has returned and left the try. Flushing
+            // now runs "UPDATE rides ... WHERE id = ? AND version = ?" here, so if another driver
+            // accepted first (0 rows updated) the exception is caught below and becomes a 409.
+            val saved = rideRepository.saveAndFlush(ride.copy(driverId = driverId, status = RideStatus.MATCHED))
+            kafkaEventProducer.publishRideAccepted(saved.id) // sent after commit, see KafkaEventProducer
             return saved
         } catch (_: ObjectOptimisticLockingFailureException) {
             throw ResponseStatusException(HttpStatus.CONFLICT, "Ride was already accepted by another driver")
         }
     }
 
+    @Transactional(readOnly = false) // check-then-write as one unit: the status check and the update commit or roll back together
     fun startRide(rideId: String, driverId: String): Ride {
         val ride = getRide(rideId)
         if (ride.status != RideStatus.MATCHED) {
@@ -79,6 +97,7 @@ class RideService(
         return rideRepository.save(ride.copy(status = RideStatus.IN_PROGRESS))
     }
 
+    @Transactional(readOnly = false) // see startRide
     fun completeRide(rideId: String, driverId: String): Ride {
         val ride = getRide(rideId)
         if (ride.status != RideStatus.IN_PROGRESS) {
@@ -97,6 +116,7 @@ class RideService(
         return saved
     }
 
+    @Transactional(readOnly = false) // see startRide
     fun cancelRide(rideId: String, userId: String): Ride {
         val ride = getRide(rideId)
         if (ride.status == RideStatus.IN_PROGRESS || ride.status == RideStatus.COMPLETED) {

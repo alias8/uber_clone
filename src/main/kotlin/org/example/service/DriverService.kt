@@ -6,6 +6,7 @@ import org.example.model.Driver
 import org.example.model.RideStatus
 import org.example.repository.DriverRepository
 import org.example.repository.RideRepository
+import org.example.utils.afterCommit
 import org.example.utils.etaMinutes
 import org.example.utils.haversineKm
 import org.springframework.data.geo.Circle
@@ -16,6 +17,7 @@ import org.springframework.data.redis.connection.RedisGeoCommands
 import org.springframework.data.redis.core.RedisTemplate
 import org.springframework.http.HttpStatus
 import org.springframework.stereotype.Service
+import org.springframework.transaction.annotation.Transactional
 import org.springframework.web.server.ResponseStatusException
 
 private const val DRIVER_GEO_KEY = "drivers:locations"
@@ -32,6 +34,11 @@ class DriverService(
 ) {
     private val geo get() = redisTemplate.opsForGeo()
 
+    // @Transactional on the read-then-write methods below: the check and the write commit or roll
+    // back together, and joined callers (acceptRide) share one transaction. Added on the
+    // read-replicas branch, where they first mattered for routing; under opt-in routing they
+    // are about atomicity.
+    @Transactional(readOnly = false)
     fun registerDriver(userId: String, request: DriverRegisterRequest): Driver {
         if (driverRepository.existsById(userId)) {
             throw ResponseStatusException(HttpStatus.CONFLICT, "Driver profile already exists")
@@ -51,12 +58,14 @@ class DriverService(
             ResponseStatusException(HttpStatus.NOT_FOUND, "No driver profile found")
         }
 
+    @Transactional(readOnly = false)
     fun goOnline(userId: String, lat: Double, lng: Double): Driver {
         val driver = getProfile(userId)
         geo.add(DRIVER_GEO_KEY, Point(lng, lat), userId)
         return markAvailable(driver)
     }
 
+    @Transactional(readOnly = false)
     fun goOffline(userId: String): Driver {
         val driver = getProfile(userId)
         redisTemplate.opsForZSet().remove(DRIVER_GEO_KEY, userId)
@@ -65,22 +74,32 @@ class DriverService(
         return saved
     }
 
+    @Transactional(readOnly = false)
     fun markAvailable(userId: String) {
         driverRepository.findById(userId).ifPresent { markAvailable(it) }
     }
 
+    @Transactional(readOnly = false)
     fun markUnavailable(userId: String) {
         driverRepository.findById(userId).ifPresent { markUnavailable(it) }
     }
 
+    // The DB row is the source of truth; the Redis set is a copy for fast dispatch lookups.
+    // Redis isn't part of the DB transaction, so it's updated only after commit. Before, a
+    // rolled-back acceptRide (lost the race) left the driver removed from the Redis set while
+    // the DB still said available, and no new offers reached them.
+    // If the process dies between commit and the Redis call, Redis is briefly wrong; acceptRide
+    // checks driver.isAvailable in the DB, so the worst case is a wasted offer, not a double booking.
     private fun markAvailable(driver: Driver): Driver {
-        redisTemplate.opsForSet().add(DRIVER_AVAILABLE_SET, driver.userId)
-        return driverRepository.save(driver.copy(isAvailable = true))
+        val saved = driverRepository.save(driver.copy(isAvailable = true))
+        afterCommit { redisTemplate.opsForSet().add(DRIVER_AVAILABLE_SET, driver.userId) }
+        return saved
     }
 
     private fun markUnavailable(driver: Driver): Driver {
-        redisTemplate.opsForSet().remove(DRIVER_AVAILABLE_SET, driver.userId)
-        return driverRepository.save(driver.copy(isAvailable = false))
+        val saved = driverRepository.save(driver.copy(isAvailable = false))
+        afterCommit { redisTemplate.opsForSet().remove(DRIVER_AVAILABLE_SET, driver.userId) }
+        return saved
     }
 
     fun updateLocation(userId: String, lat: Double, lng: Double) {
