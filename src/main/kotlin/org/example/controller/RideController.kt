@@ -4,7 +4,6 @@ import org.example.dto.RatingRequest
 import org.example.dto.RideRequest
 import org.example.dto.RideResponse
 import org.example.dto.toResponse
-import org.example.repository.RideRepository
 import org.example.repository.UserRepository
 import org.example.service.RateLimiterService
 import org.example.service.RatingService
@@ -25,7 +24,6 @@ class RideController(
     private val rideService: RideService,
     private val ratingService: RatingService,
     private val rateLimiterService: RateLimiterService,
-    private val rideRepository: RideRepository,
     private val userRepository: UserRepository
 ) {
     private fun resolveUserId(username: String): String =
@@ -49,7 +47,7 @@ class RideController(
 
     @GetMapping("/{id}")
     fun getRide(@PathVariable id: String): ResponseEntity<RideResponse> =
-        ResponseEntity.ok(rideService.getRide(id).toResponse())
+        ResponseEntity.ok(rideService.getRideForDisplay(id).toResponse())
 
     @PreAuthorize("hasRole('DRIVER')")
     @PostMapping("/{id}/accept")
@@ -98,7 +96,7 @@ class RideController(
     ): ResponseEntity<Page<RideResponse>> {
         val userId = resolveUserId(username)
         val pageable = PageRequest.of(page, size, Sort.by("requestedAt").descending())
-        return ResponseEntity.ok(rideRepository.findByRiderIdOrderByRequestedAtDesc(userId, pageable).map { it.toResponse() })
+        return ResponseEntity.ok(rideService.getRiderHistory(userId, pageable).map { it.toResponse() })
     }
 
     @PostMapping("/{id}/rate")
