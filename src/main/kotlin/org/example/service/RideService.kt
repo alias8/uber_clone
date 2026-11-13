@@ -90,8 +90,12 @@ class RideService(
 
         try {
             driverService.markUnavailable(driverId)
-            val saved = rideRepository.save(ride.copy(driverId = driverId, status = RideStatus.MATCHED))
-            kafkaEventProducer.publishRideAccepted(saved.id)
+            // saveAndFlush, not save: save() only queues the UPDATE in Hibernate's memory and it
+            // would be sent at commit, after this method has returned and left the try. Flushing
+            // now runs "UPDATE rides ... WHERE id = ? AND version = ?" here, so if another driver
+            // accepted first (0 rows updated) the exception is caught below and becomes a 409.
+            val saved = rideRepository.saveAndFlush(ride.copy(driverId = driverId, status = RideStatus.MATCHED))
+            kafkaEventProducer.publishRideAccepted(saved.id) // sent after commit, see KafkaEventProducer
             return saved
         } catch (_: ObjectOptimisticLockingFailureException) {
             throw ResponseStatusException(HttpStatus.CONFLICT, "Ride was already accepted by another driver")

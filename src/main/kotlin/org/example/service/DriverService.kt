@@ -6,6 +6,7 @@ import org.example.model.Driver
 import org.example.model.RideStatus
 import org.example.repository.DriverRepository
 import org.example.repository.RideRepository
+import org.example.utils.afterCommit
 import org.example.utils.etaMinutes
 import org.example.utils.haversineKm
 import org.springframework.data.geo.Circle
@@ -82,14 +83,22 @@ class DriverService(
         driverRepository.findById(userId).ifPresent { markUnavailable(it) }
     }
 
+    // The DB row is the source of truth; the Redis set is a copy for fast dispatch lookups.
+    // Redis isn't part of the DB transaction, so it's updated only after commit. Before, a
+    // rolled-back acceptRide (lost the race) left the driver removed from the Redis set while
+    // the DB still said available, and no new offers reached them.
+    // If the process dies between commit and the Redis call, Redis is briefly wrong; acceptRide
+    // checks driver.isAvailable in the DB, so the worst case is a wasted offer, not a double booking.
     private fun markAvailable(driver: Driver): Driver {
-        redisTemplate.opsForSet().add(DRIVER_AVAILABLE_SET, driver.userId)
-        return driverRepository.save(driver.copy(isAvailable = true))
+        val saved = driverRepository.save(driver.copy(isAvailable = true))
+        afterCommit { redisTemplate.opsForSet().add(DRIVER_AVAILABLE_SET, driver.userId) }
+        return saved
     }
 
     private fun markUnavailable(driver: Driver): Driver {
-        redisTemplate.opsForSet().remove(DRIVER_AVAILABLE_SET, driver.userId)
-        return driverRepository.save(driver.copy(isAvailable = false))
+        val saved = driverRepository.save(driver.copy(isAvailable = false))
+        afterCommit { redisTemplate.opsForSet().remove(DRIVER_AVAILABLE_SET, driver.userId) }
+        return saved
     }
 
     fun updateLocation(userId: String, lat: Double, lng: Double) {
