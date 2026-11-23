@@ -10,16 +10,6 @@ import org.springframework.http.HttpStatus
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
 import org.springframework.web.server.ResponseStatusException
-import java.math.BigDecimal
-import java.math.RoundingMode
-
-private fun incrementalAvg(oldAvg: Double?, oldCount: Int, newScore: Int): Double {
-    val avg = oldAvg ?: 0.0
-    return (avg * oldCount + newScore) / (oldCount + 1)
-}
-
-private fun Double.roundTo2(): Double =
-    BigDecimal(this).setScale(2, RoundingMode.HALF_UP).toDouble()
 
 @Service
 class RatingService(
@@ -55,13 +45,12 @@ class RatingService(
 
         ratingRepository.save(Rating(rideId = rideId, fromUserId = fromUserId, toUserId = toUserId, score = score, comment = comment))
 
-        driverRepository.findById(toUserId).ifPresent { driver ->
-            val newAvg = incrementalAvg(driver.avgRating, driver.ratingCount, score).roundTo2()
-            driverRepository.save(driver.copy(avgRating = newAvg, ratingCount = driver.ratingCount + 1))
-        }
-        userRepository.findById(toUserId).ifPresent { user ->
-            val newAvg = incrementalAvg(user.avgRating, user.ratingCount, score).roundTo2()
-            userRepository.save(user.copy(avgRating = newAvg, ratingCount = user.ratingCount + 1))
-        }
+        // The averages are updated in SQL, not read into Kotlin, changed and saved. That version
+        // lost ratings: two riders rating the same driver at once both read count = 10 and both
+        // wrote 11. Doing the arithmetic in one UPDATE lets the row lock serialise them, so there
+        // is no conflict to detect and nothing to retry. (Same rows as before: a driver's rating
+        // also updates their users row, matching V3's backfill of users.rating_count.)
+        driverRepository.addRating(toUserId, score)
+        userRepository.addRating(toUserId, score)
     }
 }
