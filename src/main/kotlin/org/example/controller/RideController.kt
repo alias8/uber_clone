@@ -6,6 +6,7 @@ import org.example.dto.RideResponse
 import org.example.dto.toResponse
 import org.example.repository.UserRepository
 import org.example.service.RateLimiterService
+import org.example.service.TxRetry
 import org.example.service.RatingService
 import org.example.service.RideService
 import org.example.service.RideQueries
@@ -26,7 +27,8 @@ class RideController(
     private val rideQueries: RideQueries,
     private val ratingService: RatingService,
     private val rateLimiterService: RateLimiterService,
-    private val userRepository: UserRepository
+    private val userRepository: UserRepository,
+    private val txRetry: TxRetry // retries transient DB failures from outside the transaction
 ) {
     private fun resolveUserId(username: String): String =
         userRepository.findByUsername(username)?.id
@@ -58,7 +60,7 @@ class RideController(
         @AuthenticationPrincipal username: String
     ): ResponseEntity<RideResponse> {
         val userId = resolveUserId(username)
-        return ResponseEntity.ok(rideService.acceptRide(id, userId).toResponse())
+        return ResponseEntity.ok(txRetry.run { rideService.acceptRide(id, userId) }.toResponse())
     }
 
     @PreAuthorize("hasRole('DRIVER')")
@@ -68,7 +70,7 @@ class RideController(
         @AuthenticationPrincipal username: String
     ): ResponseEntity<RideResponse> {
         val userId = resolveUserId(username)
-        return ResponseEntity.ok(rideService.startRide(id, userId).toResponse())
+        return ResponseEntity.ok(txRetry.run { rideService.startRide(id, userId) }.toResponse())
     }
 
     @PreAuthorize("hasRole('DRIVER')")
@@ -78,7 +80,7 @@ class RideController(
         @AuthenticationPrincipal username: String
     ): ResponseEntity<RideResponse> {
         val userId = resolveUserId(username)
-        return ResponseEntity.ok(rideService.completeRide(id, userId).toResponse())
+        return ResponseEntity.ok(txRetry.run { rideService.completeRide(id, userId) }.toResponse())
     }
 
     @PostMapping("/{id}/cancel")
@@ -87,7 +89,7 @@ class RideController(
         @AuthenticationPrincipal username: String
     ): ResponseEntity<RideResponse> {
         val userId = resolveUserId(username)
-        return ResponseEntity.ok(rideService.cancelRide(id, userId).toResponse())
+        return ResponseEntity.ok(txRetry.run { rideService.cancelRide(id, userId) }.toResponse())
     }
 
     @GetMapping("/history")
@@ -108,7 +110,7 @@ class RideController(
         @AuthenticationPrincipal username: String
     ): ResponseEntity<Void> {
         val userId = resolveUserId(username)
-        ratingService.rate(id, userId, request.score, request.comment)
+        txRetry.run { ratingService.rate(id, userId, request.score, request.comment) }
         return ResponseEntity.noContent().build()
     }
 }

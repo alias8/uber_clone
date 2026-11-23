@@ -6,6 +6,7 @@ import org.example.model.Role
 import org.example.repository.UserRepository
 import org.example.security.JwtCookieService
 import org.example.service.DriverService
+import org.example.service.TxRetry
 import org.example.service.RideQueries
 import org.springframework.data.domain.Page
 import org.springframework.data.domain.PageRequest
@@ -23,7 +24,8 @@ class DriverController(
     private val driverService: DriverService,
     private val rideQueries: RideQueries,
     private val userRepository: UserRepository,
-    private val jwtCookieService: JwtCookieService
+    private val jwtCookieService: JwtCookieService,
+    private val txRetry: TxRetry // retries transient DB failures from outside the transaction
 ) {
     private fun resolveUserId(username: String): String =
         userRepository.findByUsername(username)?.id
@@ -36,7 +38,7 @@ class DriverController(
         response: HttpServletResponse
     ): ResponseEntity<DriverProfileResponse> {
         val userId = resolveUserId(username)
-        val result = driverService.registerDriver(userId, request)
+        val result = txRetry.run { driverService.registerDriver(userId, request) }
         userRepository.findByUsername(username)?.let { userRepository.save(it.copy(role = Role.DRIVER)) }
         response.addCookie(jwtCookieService.issueTokenCookie(username, Role.DRIVER))
         return ResponseEntity.status(HttpStatus.CREATED).body(result.toResponse())
@@ -56,14 +58,14 @@ class DriverController(
         @AuthenticationPrincipal username: String
     ): ResponseEntity<DriverProfileResponse> {
         val userId = resolveUserId(username)
-        return ResponseEntity.ok(driverService.goOnline(userId, request.lat, request.lng).toResponse())
+        return ResponseEntity.ok(txRetry.run { driverService.goOnline(userId, request.lat, request.lng) }.toResponse())
     }
 
     @PreAuthorize("hasRole('DRIVER')")
     @PostMapping("/mode/off")
     fun goOffline(@AuthenticationPrincipal username: String): ResponseEntity<DriverProfileResponse> {
         val userId = resolveUserId(username)
-        return ResponseEntity.ok(driverService.goOffline(userId).toResponse())
+        return ResponseEntity.ok(txRetry.run { driverService.goOffline(userId) }.toResponse())
     }
 
     @PreAuthorize("hasRole('DRIVER')")

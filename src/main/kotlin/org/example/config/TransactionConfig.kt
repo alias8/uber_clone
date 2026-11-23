@@ -1,5 +1,6 @@
 package org.example.config
 
+import org.example.service.TxAttemptTracker
 import org.springframework.boot.autoconfigure.transaction.TransactionManagerCustomizer
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Configuration
@@ -26,5 +27,7 @@ class TransactionConfig {
     @Bean
     fun validateExistingTransactions() = TransactionManagerCustomizer<AbstractPlatformTransactionManager> {
         it.isValidateExistingTransaction = true
+        // Lets TxRetry tell "failed before COMMIT" (safe to retry) from "failed during COMMIT" (maybe committed).
+        it.addListener(TxAttemptTracker)
     }
 }
