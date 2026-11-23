@@ -1,6 +1,7 @@
 package org.example.service
 
 import org.example.utils.afterCommit
+import org.slf4j.LoggerFactory
 import org.springframework.kafka.core.KafkaTemplate
 import org.springframework.stereotype.Service
 
@@ -20,5 +21,20 @@ class KafkaEventProducer(
 
     fun publishRideCancelled(rideId: String) = send("ride-cancelled", rideId)
 
-    private fun send(topic: String, rideId: String) = afterCommit { kafkaTemplate.send(topic, rideId) }
+    private val log = LoggerFactory.getLogger(javaClass)
+
+    // The DB change has already committed by the time this runs, so a Kafka failure must not turn
+    // the request into a 500 (the client would retry something that already happened). Log it
+    // instead: a lost event, the known no-outbox gap. Two ways it fails (application.properties):
+    //  - send() itself throws after max.block.ms (2 s) when it can't get topic metadata;
+    //  - the returned future fails after delivery.timeout.ms (10 s) of retries in the background.
+    private fun send(topic: String, rideId: String) = afterCommit {
+        try {
+            kafkaTemplate.send(topic, rideId).whenComplete { _, ex ->
+                if (ex != null) log.error("Lost event {} for ride {}: delivery failed", topic, rideId, ex)
+            }
+        } catch (ex: Exception) {
+            log.error("Lost event {} for ride {}: send() timed out", topic, rideId, ex)
+        }
+    }
 }
