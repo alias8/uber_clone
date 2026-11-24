@@ -32,7 +32,8 @@ import java.sql.SQLTransientConnectionException
  * retry/error handling deals with it.
  *
  * Retrying is only safe for idempotent requests. A pool timeout usually means the request never
- * reached the DB, but the client can't know that, so a retried POST /rides needs an idempotency key.
+ * reached the DB, but the client can't know that, so a retried POST /rides should carry an
+ * Idempotency-Key (see IdempotencyKeys).
  *
  * Watch hikaricp.connections.pending and hikaricp.connections.timeout (Micrometer): a stream of
  * these 503s means the DB or a slow query is the real problem. The 503 is a symptom, not the fix.

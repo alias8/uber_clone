@@ -9,10 +9,15 @@ import org.example.repository.RideRepository
 import org.springframework.http.HttpStatus
 import org.springframework.orm.ObjectOptimisticLockingFailureException
 import org.springframework.stereotype.Service
+import org.springframework.transaction.PlatformTransactionManager
 import org.springframework.transaction.annotation.Transactional
+import org.springframework.transaction.support.TransactionTemplate
 import org.springframework.web.server.ResponseStatusException
 import java.math.BigDecimal
 import java.time.Instant
+
+/** The ride POST /rides returns, and whether it came from an earlier request with the same idempotency key. */
+data class RideCreation(val ride: Ride, val replayed: Boolean)
 
 @Service
 class RideService(
@@ -20,14 +25,24 @@ class RideService(
     private val driverRepository: DriverRepository,
     private val driverService: DriverService,
     private val pricingClient: PricingClient,
-    private val kafkaEventProducer: KafkaEventProducer
+    private val kafkaEventProducer: KafkaEventProducer,
+    private val idempotencyKeys: IdempotencyKeys,
+    transactionManager: PlatformTransactionManager
 ) {
+    private val writeTx = TransactionTemplate(transactionManager)
+
     // Not @Transactional on purpose: it makes a gRPC call to pricing-service, and a transaction
-    // would hold a DB connection across it. Its reads go to the primary like every read that
-    // doesn't opt in to the replica.
-    fun requestRide(riderId: String, request: RideRequest): Ride {
+    // would hold a DB connection across it. Only the inserts at the end run in a transaction
+    // (writeTx). Its reads go to the primary like every read that doesn't opt in to the replica.
+    //
+    // With an idempotency key, the ride and the key are inserted in that one transaction, so they
+    // commit or roll back together (see IdempotencyKeys). The controller has already checked for
+    // a stored key; the two re-checks here cover a copy of this request running at the same time.
+    fun requestRide(riderId: String, request: RideRequest, idempotencyKey: String? = null): RideCreation {
         val activeStatuses = listOf(RideStatus.REQUESTED, RideStatus.MATCHED, RideStatus.IN_PROGRESS)
         if (rideRepository.existsByRiderIdAndStatusIn(riderId, activeStatuses)) {
+            // The active ride may be the one a concurrent copy of this request just committed.
+            idempotencyKey?.let { idempotencyKeys.replay(riderId, it, request) }?.let { return RideCreation(it, replayed = true) }
             throw ResponseStatusException(HttpStatus.CONFLICT, "Rider already has an active ride")
         }
         val ride = Ride(
@@ -38,9 +53,22 @@ class RideService(
             dropoffLng = request.dropoffLng
         )
         val estimated = calculateFare(ride)
-        val saved = rideRepository.save(ride.copy(estimatedFare = estimated))
-        kafkaEventProducer.publishRideRequested(saved.id)
-        return saved
+        val saved = writeTx.execute { status ->
+            val saved = rideRepository.saveAndFlush(ride.copy(estimatedFare = estimated))
+            if (idempotencyKey != null && !idempotencyKeys.claim(riderId, idempotencyKey, request, saved.id)) {
+                // Lost the race: a concurrent request with this key committed first. Undo this ride.
+                status.setRollbackOnly()
+                return@execute null
+            }
+            kafkaEventProducer.publishRideRequested(saved.id) // sent after commit, see KafkaEventProducer
+            saved
+        }
+        if (saved == null) {
+            val winner = idempotencyKeys.replay(riderId, idempotencyKey!!, request)
+                ?: error("Idempotency key $idempotencyKey lost a race but has no stored ride")
+            return RideCreation(winner, replayed = true)
+        }
+        return RideCreation(saved, replayed = false)
     }
 
     // Used inside the write methods below (read the ride, check its status, update it), so it
