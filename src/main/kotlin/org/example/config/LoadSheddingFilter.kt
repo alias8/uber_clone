@@ -4,11 +4,7 @@ import jakarta.servlet.FilterChain
 import jakarta.servlet.http.HttpServletRequest
 import jakarta.servlet.http.HttpServletResponse
 import org.slf4j.LoggerFactory
-import org.springframework.beans.factory.annotation.Value
-import org.springframework.core.Ordered
-import org.springframework.core.annotation.Order
 import org.springframework.http.HttpHeaders
-import org.springframework.stereotype.Component
 import org.springframework.web.filter.OncePerRequestFilter
 import java.util.concurrent.Semaphore
 import java.util.concurrent.atomic.AtomicLong
@@ -34,15 +30,14 @@ import java.util.concurrent.atomic.AtomicLong
  * every permit; everything else stops when only the reserved permits are left. So when overloaded,
  * history and polling are shed first and accept/complete keep working.
  *
- * Runs before Spring Security (HIGHEST_PRECEDENCE), so a shed request doesn't even parse its JWT.
+ * Registered first in the servlet filter chain by FilterConfig (not a @Component), so it runs
+ * before Spring Security and a shed request doesn't even parse its JWT.
  * Skipped for /health (the ALB must still see the instance as alive; shedding is a healthy state)
  * and for SSE streams, which stay open for minutes and would hold a permit the whole time.
  */
-@Component
-@Order(Ordered.HIGHEST_PRECEDENCE)
 class LoadSheddingFilter(
-    @Value("\${app.load-shedding.max-in-flight:150}") maxInFlight: Int,
-    @Value("\${app.load-shedding.reserved-for-critical:30}") reservedForCritical: Int
+    maxInFlight: Int,
+    reservedForCritical: Int
 ) : OncePerRequestFilter() {
 
     private val limiter = InFlightLimiter(maxInFlight, reservedForCritical)
