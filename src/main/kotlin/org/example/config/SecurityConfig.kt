@@ -22,6 +22,8 @@ class SecurityConfig(private val jwtFilter: JwtFilter) {
             .sessionManagement { it.sessionCreationPolicy(SessionCreationPolicy.STATELESS) }
             .authorizeHttpRequests {
                 it.requestMatchers("/auth/register", "/auth/login").permitAll()
+                // ALB health checks are unauthenticated; without this every instance would look unhealthy (403).
+                it.requestMatchers("/health").permitAll()
                 it.anyRequest().authenticated()
             }
             .addFilterBefore(jwtFilter, UsernamePasswordAuthenticationFilter::class.java)
