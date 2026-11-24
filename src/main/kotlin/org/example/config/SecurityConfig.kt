@@ -1,5 +1,6 @@
 package org.example.config
 
+import jakarta.servlet.DispatcherType
 import org.example.security.JwtFilter
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Configuration
@@ -24,6 +25,12 @@ class SecurityConfig(private val jwtFilter: JwtFilter) {
                 it.requestMatchers("/auth/register", "/auth/login").permitAll()
                 // ALB health checks are unauthenticated; without this every instance would look unhealthy (403).
                 it.requestMatchers("/health").permitAll()
+                // Error pages: a ResponseStatusException (409, 404, 422...) makes Tomcat forward to
+                // /error. JwtFilter is a OncePerRequestFilter, so it doesn't run again on that
+                // forward, the forwarded request is anonymous, and without this every 4xx in the
+                // app reached the client as a 403. The original request was already authorized.
+                it.dispatcherTypeMatchers(DispatcherType.ERROR).permitAll()
+                it.requestMatchers("/error").permitAll()
                 it.anyRequest().authenticated()
             }
             .addFilterBefore(jwtFilter, UsernamePasswordAuthenticationFilter::class.java)
